@@ -27,9 +27,12 @@ func TestConnectCommandMatchesGolden(t *testing.T) {
 		t.Fatalf("connectID bytes = %x, want %x", got, want)
 	}
 
-	cmd, err := protocol.ParseCommand(wire)
+	cmd, n, err := protocol.ParseCommand(wire)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != len(wire) {
+		t.Fatalf("consumed = %d, want %d", n, len(wire))
 	}
 
 	connect, ok := cmd.(protocol.Connect)
@@ -69,9 +72,12 @@ func TestAcknowledgeCommandMatchesGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd, err := protocol.ParseCommand(wire)
+	cmd, n, err := protocol.ParseCommand(wire)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != len(wire) {
+		t.Fatalf("consumed = %d, want %d", n, len(wire))
 	}
 
 	ack, ok := cmd.(protocol.Acknowledge)

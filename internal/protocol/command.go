@@ -71,9 +71,9 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
-func ParseCommand(src []byte) (PacketCommand, error) {
+func ParseCommand(src []byte) (PacketCommand, int, error) {
 	if len(src) < commandHeaderSize {
-		return nil, fmt.Errorf("protocol command too short: got %d bytes", len(src))
+		return nil, 0, fmt.Errorf("protocol command too short: got %d bytes", len(src))
 	}
 
 	switch Command(src[0] & byte(CommandMask)) {
@@ -82,13 +82,13 @@ func ParseCommand(src []byte) (PacketCommand, error) {
 	case CommandConnect:
 		return parseConnect(src)
 	default:
-		return nil, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
+		return nil, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
 	}
 }
 
-func parseAcknowledge(src []byte) (Acknowledge, error) {
+func parseAcknowledge(src []byte) (Acknowledge, int, error) {
 	if len(src) < acknowledgeCommandSize {
-		return Acknowledge{}, fmt.Errorf("acknowledge command too short: got %d bytes", len(src))
+		return Acknowledge{}, 0, fmt.Errorf("acknowledge command too short: got %d bytes", len(src))
 	}
 
 	return Acknowledge{
@@ -96,12 +96,12 @@ func parseAcknowledge(src []byte) (Acknowledge, error) {
 		ReliableSequenceNumber:         binary.BigEndian.Uint16(src[2:4]),
 		ReceivedReliableSequenceNumber: binary.BigEndian.Uint16(src[4:6]),
 		ReceivedSentTime:               binary.BigEndian.Uint16(src[6:8]),
-	}, nil
+	}, acknowledgeCommandSize, nil
 }
 
-func parseConnect(src []byte) (Connect, error) {
+func parseConnect(src []byte) (Connect, int, error) {
 	if len(src) < connectCommandSize {
-		return Connect{}, fmt.Errorf("connect command too short: got %d bytes", len(src))
+		return Connect{}, 0, fmt.Errorf("connect command too short: got %d bytes", len(src))
 	}
 
 	return Connect{
@@ -120,5 +120,5 @@ func parseConnect(src []byte) (Connect, error) {
 		PacketThrottleDeceleration: binary.BigEndian.Uint32(src[36:40]),
 		ConnectID:                  binary.LittleEndian.Uint32(src[40:44]),
 		Data:                       binary.BigEndian.Uint32(src[44:48]),
-	}, nil
+	}, connectCommandSize, nil
 }

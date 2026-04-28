@@ -37,3 +37,22 @@ func TestParseHeaderRejectsTruncatedSentTime(t *testing.T) {
 		t.Fatal("ParseHeader succeeded on truncated sent-time header")
 	}
 }
+
+func TestHeaderMinimalRoundTrip(t *testing.T) {
+	h := protocol.Header{PeerID: 0x123, SessionID: 1}
+
+	wire := h.MarshalBinary(nil)
+	wantWire := []byte{0x11, 0x23}
+	if !bytes.Equal(wire, wantWire) {
+		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)
+	}
+
+	got, err := protocol.ParseHeader(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.PeerID != h.PeerID || got.SessionID != h.SessionID || got.Flags != 0 || got.SentTime != 0 {
+		t.Fatalf("round-trip mismatch: %+v != %+v", got, h)
+	}
+}
