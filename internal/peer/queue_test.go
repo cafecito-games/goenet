@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
 func TestOutgoingQueuePreservesFIFOOrder(t *testing.T) {
@@ -54,6 +55,52 @@ func TestAcknowledgementQueuePreservesInsertionOrder(t *testing.T) {
 
 	q.Push(first)
 	q.Push(second)
+
+	gotFirst, ok := q.Pop()
+	if !ok {
+		t.Fatal("first Pop() = empty")
+	}
+	if gotFirst != first {
+		t.Fatalf("first Pop() = %+v, want %+v", gotFirst, first)
+	}
+
+	gotSecond, ok := q.Pop()
+	if !ok {
+		t.Fatal("second Pop() = empty")
+	}
+	if gotSecond != second {
+		t.Fatalf("second Pop() = %+v, want %+v", gotSecond, second)
+	}
+}
+
+func TestIncomingQueuePreservesFIFOOrder(t *testing.T) {
+	var q incomingQueue
+
+	first := &IncomingCommand{
+		Command: Command{
+			Header: Header{
+				Command:                protocol.CommandSendReliable,
+				ChannelID:              1,
+				ReliableSequenceNumber: 10,
+			},
+		},
+	}
+	second := &IncomingCommand{
+		Command: Command{
+			Header: Header{
+				Command:                protocol.CommandSendUnreliable,
+				ChannelID:              1,
+				ReliableSequenceNumber: 11,
+			},
+		},
+	}
+
+	q.Push(first)
+	q.Push(second)
+
+	if got := q.Len(); got != 2 {
+		t.Fatalf("Len() = %d", got)
+	}
 
 	gotFirst, ok := q.Pop()
 	if !ok {

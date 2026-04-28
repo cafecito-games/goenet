@@ -5,6 +5,20 @@ import (
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
+// Header preserves the common ENet protocol header fields that drive queue logic.
+type Header struct {
+	Command                protocol.Command
+	ChannelID              uint8
+	Flags                  protocol.CommandFlag
+	ReliableSequenceNumber uint16
+}
+
+// Command preserves generic protocol metadata and the typed payload together.
+type Command struct {
+	Header  Header
+	Payload protocol.PacketCommand
+}
+
 // OutgoingCommand is the queued state required before packet assembly exists.
 type OutgoingCommand struct {
 	ReliableSequenceNumber   uint16
@@ -15,7 +29,7 @@ type OutgoingCommand struct {
 	FragmentOffset           uint32
 	FragmentLength           uint16
 	SendAttempts             uint16
-	Command                  protocol.PacketCommand
+	Command                  Command
 	Packet                   *goenet.Packet
 }
 
@@ -23,7 +37,7 @@ type OutgoingCommand struct {
 type IncomingCommand struct {
 	ReliableSequenceNumber   uint16
 	UnreliableSequenceNumber uint16
-	Command                  protocol.PacketCommand
+	Command                  Command
 	FragmentCount            uint32
 	FragmentsRemaining       uint32
 	Fragments                []uint32
@@ -33,7 +47,7 @@ type IncomingCommand struct {
 // Acknowledgement tracks pending protocol acknowledgements in FIFO order.
 type Acknowledgement struct {
 	SentTime uint32
-	Command  protocol.Acknowledge
+	Command  Command
 }
 
 type outgoingQueue struct {

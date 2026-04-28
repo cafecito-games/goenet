@@ -6,6 +6,8 @@ type Channel struct {
 	OutgoingUnreliableSequenceNumber uint16
 	IncomingReliableSequenceNumber   uint16
 	IncomingUnreliableSequenceNumber uint16
+	IncomingReliableCommands         incomingQueue
+	IncomingUnreliableCommands       incomingQueue
 }
 
 // NewChannel returns a zero-initialized channel state holder.

@@ -6,6 +6,27 @@ import (
 	"github.com/cafecito-games/goenet"
 )
 
+func TestPeerStateOrdinalsMatchENet(t *testing.T) {
+	states := []goenet.PeerState{
+		goenet.PeerStateDisconnected,
+		goenet.PeerStateConnecting,
+		goenet.PeerStateAcknowledgingConnect,
+		goenet.PeerStateConnectionPending,
+		goenet.PeerStateConnectionSucceeded,
+		goenet.PeerStateConnected,
+		goenet.PeerStateDisconnectLater,
+		goenet.PeerStateDisconnecting,
+		goenet.PeerStateAcknowledgingDisconnect,
+		goenet.PeerStateZombie,
+	}
+
+	for want, got := range states {
+		if uint8(got) != uint8(want) {
+			t.Fatalf("state %d = %d", want, got)
+		}
+	}
+}
+
 func TestNewChannelStartsAtZeroSequences(t *testing.T) {
 	ch := NewChannel()
 	if ch.OutgoingReliableSequenceNumber != 0 {
@@ -19,6 +40,12 @@ func TestNewChannelStartsAtZeroSequences(t *testing.T) {
 	}
 	if ch.IncomingUnreliableSequenceNumber != 0 {
 		t.Fatalf("got %d", ch.IncomingUnreliableSequenceNumber)
+	}
+	if got := ch.IncomingReliableCommands.Len(); got != 0 {
+		t.Fatalf("IncomingReliableCommands.Len() = %d", got)
+	}
+	if got := ch.IncomingUnreliableCommands.Len(); got != 0 {
+		t.Fatalf("IncomingUnreliableCommands.Len() = %d", got)
 	}
 }
 
