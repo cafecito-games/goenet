@@ -324,6 +324,69 @@ func TestServiceTimeoutDuringHandshakeResetsSilently(t *testing.T) {
 	}
 }
 
+func TestServiceSilentHandshakeTimeoutContinuesServicingOtherPeers(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+
+	timedOut := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateAcknowledgingConnect)
+	timedOut.IncomingPeerID = 0
+	timedOut.IncomingSessionID = 1
+	timedOut.RoundTripTime = 100
+	timedOut.RoundTripTimeVariance = 25
+	timedOut.TimeoutLimit = 32
+	timedOut.TimeoutMinimum = 5000
+	timedOut.TimeoutMaximum = 30000
+	timedOut.SentReliableCommands.PushBack(&ipeer.OutgoingCommand{
+		ReliableSequenceNumber: 1,
+		SentTime:               1000,
+		RoundTripTimeout:       500,
+		SendAttempts:           1,
+		Command: ipeer.Command{
+			Header: ipeer.Header{
+				Command:                iprotocol.CommandSendReliable,
+				ChannelID:              0,
+				Flags:                  iprotocol.CommandFlagAcknowledge,
+				ReliableSequenceNumber: 1,
+			},
+		},
+		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+	})
+
+	ready := host.AddPeer(mustAddress(t, "127.0.0.1:9002"), goenet.PeerStateConnected)
+	ready.IncomingPeerID = 1
+	ready.IncomingSessionID = 1
+
+	sock.QueueInbound(ready.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    ready.IncomingPeerID,
+			SessionID: ready.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x4242,
+		},
+		iprotocol.SendReliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			Data: []byte("next"),
+		},
+	))
+
+	host.serviceTime = 32000
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	}
+	if got := string(event.Packet.Data); got != "next" {
+		t.Fatalf("packet = %q, want %q", got, "next")
+	}
+	if timedOut.State != goenet.PeerStateDisconnected {
+		t.Fatalf("timedOut state = %d, want %d", timedOut.State, goenet.PeerStateDisconnected)
+	}
+}
+
 func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testing.T) {
 	host, _ := newTestHost(t)
 	timedOut := mustConnectedPeer(t, host)

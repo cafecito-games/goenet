@@ -223,7 +223,7 @@ func (h *Host) checkTimeouts() (Event, bool) {
 				(timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMaximum ||
 					(attemptLimit >= p.TimeoutLimit &&
 						timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMinimum)) {
-				return h.notifyDisconnectTimeout(p), true
+				return h.notifyDisconnectTimeout(p)
 			}
 
 			p.PacketsLost++
@@ -249,14 +249,14 @@ func (h *Host) checkTimeouts() (Event, bool) {
 	return Event{}, false
 }
 
-func (h *Host) notifyDisconnectTimeout(p *peer.Peer) Event {
+func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
 	if p.State >= goenet.PeerStateConnectionPending {
 		h.recalculateBandwidthLimits = true
 	}
 
 	if p.State != goenet.PeerStateConnecting && p.State < goenet.PeerStateConnectionSucceeded {
 		h.resetPeer(p)
-		return Event{}
+		return Event{}, false
 	}
 
 	event := Event{
@@ -264,7 +264,7 @@ func (h *Host) notifyDisconnectTimeout(p *peer.Peer) Event {
 		Peer: p,
 	}
 	h.resetPeer(p)
-	return event
+	return event, true
 }
 
 func (h *Host) bandwidthThrottle() {
