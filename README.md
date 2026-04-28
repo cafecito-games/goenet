@@ -24,7 +24,7 @@ The module currently provides only the baseline package scaffold and will grow a
 
 ## Minimal Example
 
-The transport implementation is not in place yet, but the intended package shape is a Go client/server library built around host, connect, and service loops:
+The transport implementation is not in place yet. The following is illustrative pseudocode showing the intended future client/server API shape around host, listen, connect, and service loops; these symbols do not exist in the current package surface yet:
 
 ```go
 package main

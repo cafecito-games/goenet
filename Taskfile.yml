@@ -46,6 +46,12 @@ tasks:
           echo "$unformatted"
           exit 1
         fi
+        unimported=$(go run golang.org/x/tools/cmd/goimports@latest -l . | grep -v '^vendor/' || true)
+        if [ -n "$unimported" ]; then
+          echo "Files needing goimports:"
+          echo "$unimported"
+          exit 1
+        fi
     silent: true
 
   tidy:
