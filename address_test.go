@@ -2,31 +2,29 @@ package goenet_test
 
 import (
 	"net/netip"
-	"reflect"
 	"testing"
 
 	"github.com/cafecito-games/goenet"
 )
 
-func TestAddressScopeIDIsUint32(t *testing.T) {
-	var addr goenet.Address
+func TestNewAddressPreservesIPv6AddrPortAndScopeID(t *testing.T) {
+	addr, err := goenet.NewAddress(netip.MustParseAddrPort("[fe80::1]:7777"), 1<<20)
+	if err != nil {
+		t.Fatalf("NewAddress() error = %v", err)
+	}
 
-	if got := reflect.TypeOf(addr.ScopeID).Kind(); got != reflect.Uint32 {
-		t.Fatalf("ScopeID kind = %v, want %v", got, reflect.Uint32)
+	if got := addr.AddrPort().String(); got != "[fe80::1]:7777" {
+		t.Fatalf("AddrPort.String() = %q", got)
+	}
+	if got := addr.ScopeID(); got != 1<<20 {
+		t.Fatalf("ScopeID() = %d", got)
 	}
 }
 
-func TestAddressCarriesIPv6AddrPortAndScopeID(t *testing.T) {
-	addr := goenet.Address{
-		AddrPort: netip.MustParseAddrPort("[fe80::1]:7777"),
-		ScopeID:  37,
-	}
-
-	if got := addr.AddrPort.String(); got != "[fe80::1]:7777" {
-		t.Fatalf("AddrPort.String() = %q", got)
-	}
-	if addr.ScopeID != 37 {
-		t.Fatalf("ScopeID = %d", addr.ScopeID)
+func TestNewAddressRejectsZonedAddrPort(t *testing.T) {
+	_, err := goenet.NewAddress(netip.MustParseAddrPort("[fe80::1%eth0]:7777"), 37)
+	if err == nil {
+		t.Fatal("NewAddress() error = nil, want error")
 	}
 }
 
