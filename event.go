@@ -10,3 +10,12 @@ const (
 	EventReceive
 	EventDisconnectTimeout
 )
+
+// Event is the public event shape returned by host service loops and intercept hooks.
+type Event struct {
+	Type      EventType
+	Peer      *Peer
+	ChannelID uint8
+	Data      uint32
+	Packet    *Packet
+}

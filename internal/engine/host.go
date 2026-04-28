@@ -20,6 +20,7 @@ type Host struct {
 	dispatchSet map[*peer.Peer]struct{}
 	dispatchQ   []*peer.Peer
 	runtime     map[*peer.Peer]*peerRuntime
+	intercepted *Event
 }
 
 func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {

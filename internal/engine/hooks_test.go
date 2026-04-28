@@ -17,13 +17,13 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 	)
 
 	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
-		cfg.Intercept = interceptFunc(func(addr goenet.Address, payload []byte) (goenet.InterceptResult, error) {
+		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
 			calls++
-			if addr.AddrPort() != netip.MustParseAddrPort("127.0.0.1:9001") {
-				t.Fatalf("intercept addr = %v", addr.AddrPort())
+			if addr != netip.MustParseAddrPort("127.0.0.1:9001") {
+				t.Fatalf("intercept addr = %v", addr)
 			}
 			capture = append([]byte(nil), payload...)
-			return goenet.InterceptResultConsume, nil
+			return goenet.InterceptDecision{Result: goenet.InterceptResultConsume}, nil
 		})
 	})
 
@@ -46,6 +46,36 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 	}
 	if string(capture) != string(payload) {
 		t.Fatalf("intercept payload = %x, want %x", capture, payload)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+}
+
+func TestServiceInterceptCanSynthesizeEvent(t *testing.T) {
+	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
+			return goenet.InterceptDecision{
+				Result: goenet.InterceptResultConsume,
+				Event: &goenet.Event{
+					Type: goenet.EventDisconnect,
+					Data: 0xdecafbad,
+				},
+			}, nil
+		})
+	})
+
+	sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), []byte{0x01, 0x02, 0x03})
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventDisconnect {
+		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnect)
+	}
+	if event.Data != 0xdecafbad {
+		t.Fatalf("event data = %#x", event.Data)
 	}
 	if got := sock.WriteCount(); got != 0 {
 		t.Fatalf("WriteCount = %d", got)
@@ -163,9 +193,9 @@ func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	}
 }
 
-type interceptFunc func(goenet.Address, []byte) (goenet.InterceptResult, error)
+type interceptFunc func(netip.AddrPort, []byte) (goenet.InterceptDecision, error)
 
-func (fn interceptFunc) Intercept(addr goenet.Address, payload []byte) (goenet.InterceptResult, error) {
+func (fn interceptFunc) Intercept(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
 	return fn(addr, payload)
 }
 

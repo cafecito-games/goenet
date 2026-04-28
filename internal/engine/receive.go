@@ -60,6 +60,11 @@ func defaultPeerRuntime() *peerRuntime {
 }
 
 func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
+	if h.intercepted != nil {
+		event := *h.intercepted
+		h.intercepted = nil
+		return event, nil
+	}
 	if event, ok := h.dispatchEvent(); ok {
 		return event, nil
 	}
@@ -68,6 +73,11 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 	}
 	if err := h.receiveIncoming(ctx); err != nil {
 		return Event{}, err
+	}
+	if h.intercepted != nil {
+		event := *h.intercepted
+		h.intercepted = nil
+		return event, nil
 	}
 	if err := h.Flush(ctx); err != nil {
 		return Event{}, err
@@ -99,15 +109,19 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 
 func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error {
 	if h.config.Intercept != nil {
-		address, err := goenet.NewAddress(addr, 0)
+		decision, err := h.config.Intercept.Intercept(addr, payload)
 		if err != nil {
 			return err
 		}
-		result, err := h.config.Intercept.Intercept(address, payload)
-		if err != nil {
-			return err
+		if decision.Result == goenet.InterceptResultConsume && decision.Event != nil {
+			h.intercepted = &Event{
+				Type:      decision.Event.Type,
+				ChannelID: decision.Event.ChannelID,
+				Data:      decision.Event.Data,
+				Packet:    decision.Event.Packet,
+			}
 		}
-		if result == goenet.InterceptResultConsume {
+		if decision.Result == goenet.InterceptResultConsume {
 			return nil
 		}
 	}
