@@ -12,7 +12,7 @@ This repository is the baseline for a Go-native ENet-style transport layer with:
 
 ## Compatibility Target
 
-`goenet` targets wire-level interoperability with the ENet protocol family so Go services can participate in ENet-based client/server topologies. The initial scaffolding in this repository establishes the package, CI, linting, and development workflow before protocol features are implemented.
+`goenet` targets wire-level interoperability with the upstream ENet implementation in `~/CafecitoGames/enet`, specifically the single-header fork exposing ENet `2.6.5` constants and protocol layout. The initial scaffolding in this repository establishes the package, CI, linting, and development workflow before protocol features are implemented.
 
 ## Installation
 
@@ -24,18 +24,63 @@ The module currently provides only the baseline package scaffold and will grow a
 
 ## Minimal Example
 
-The transport implementation is not in place yet, but the intended package shape is a Go client/server library:
+The transport implementation is not in place yet, but the intended package shape is a Go client/server library built around host, connect, and service loops:
 
 ```go
 package main
 
-import "github.com/cafecito-games/goenet"
+import (
+	"log"
+	"time"
+
+	"github.com/cafecito-games/goenet"
+)
 
 func main() {
-	clientCfg := goenet.Config{}
-	serverCfg := goenet.Config{}
+	server, err := goenet.Listen(":7777", goenet.Config{
+		Peers:    64,
+		Channels: 2,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer server.Close()
 
-	_, _ = clientCfg, serverCfg
+	client, err := goenet.NewHost(goenet.Config{
+		Channels: 2,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	peer, err := client.Connect("127.0.0.1:7777", goenet.ConnectOptions{
+		Channels: 2,
+		Data:     42,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		if event, err := server.Service(5 * time.Millisecond); err == nil && event != nil {
+			switch event.Type {
+			case goenet.EventConnect:
+				log.Printf("server: peer connected: %v", event.Peer)
+			case goenet.EventReceive:
+				log.Printf("server: packet on channel %d", event.ChannelID)
+			}
+		}
+
+		if event, err := client.Service(5 * time.Millisecond); err == nil && event != nil {
+			switch event.Type {
+			case goenet.EventConnect:
+				_ = peer.Send(0, []byte("hello"))
+			case goenet.EventDisconnect:
+				return
+			}
+		}
+	}
 }
 ```
 
