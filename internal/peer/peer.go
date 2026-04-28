@@ -7,6 +7,8 @@ import (
 // Peer carries the internal ENet-oriented state for a remote endpoint.
 type Peer struct {
 	OutgoingReliableSequenceNumber uint16
+	OutgoingPeerID                 uint16
+	OutgoingSessionID              uint8
 	MTU                            uint32
 	Address                        goenet.Address
 	State                          goenet.PeerState

@@ -53,11 +53,15 @@ func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
 		channels[i] = peer.NewChannel()
 	}
 
+	outgoingPeerID := uint16(len(h.peers) + 1)
+	outgoingSessionID := uint8((len(h.peers) % 3) + 1)
 	p := &peer.Peer{
-		MTU:      h.config.MTU,
-		Address:  addr,
-		State:    state,
-		Channels: channels,
+		OutgoingPeerID:    outgoingPeerID,
+		OutgoingSessionID: outgoingSessionID,
+		MTU:               h.config.MTU,
+		Address:           addr,
+		State:             state,
+		Channels:          channels,
 	}
 	h.peers = append(h.peers, p)
 	return p

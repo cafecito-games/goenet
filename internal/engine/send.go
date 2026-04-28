@@ -154,6 +154,8 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	}
 
 	header := protocol.Header{}
+	header.PeerID = p.OutgoingPeerID
+	header.SessionID = p.OutgoingSessionID
 	if batchRequiresAck(selected) {
 		header.Flags = protocol.HeaderFlagSentTime
 		header.SentTime = uint16(h.serviceTime)
@@ -172,12 +174,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 	for _, item := range datagram.selected {
-		var cmd *peer.OutgoingCommand
-		if item.fromReliableQueue {
-			cmd = p.OutgoingSendReliableCommands.Remove(p.OutgoingSendReliableCommands.Front())
-		} else {
-			cmd = p.OutgoingCommands.Remove(p.OutgoingCommands.Front())
-		}
+		cmd := removeCommittedCommand(p, item)
 
 		if !item.requiresAck {
 			continue
@@ -186,6 +183,22 @@ func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 		markCommandInFlight(cmd, h.serviceTime)
 		p.SentReliableCommands.PushBack(cmd)
 	}
+}
+
+func removeCommittedCommand(p *peer.Peer, item outgoingSelection) *peer.OutgoingCommand {
+	if item.fromReliableQueue {
+		front := p.OutgoingSendReliableCommands.Front()
+		if front == nil || front.Value() != item.command {
+			panic("engine: reliable outgoing queue commit order mismatch")
+		}
+		return p.OutgoingSendReliableCommands.Remove(front)
+	}
+
+	front := p.OutgoingCommands.Front()
+	if front == nil || front.Value() != item.command {
+		panic("engine: outgoing queue commit order mismatch")
+	}
+	return p.OutgoingCommands.Remove(front)
 }
 
 func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {

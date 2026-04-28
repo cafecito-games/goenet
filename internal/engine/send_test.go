@@ -126,6 +126,12 @@ func TestFlushWithoutReliableCommandsOmitsSentTimeMetadata(t *testing.T) {
 	if header.SentTime != 0 {
 		t.Fatalf("header sent time = %d", header.SentTime)
 	}
+	if header.PeerID != peer.Raw.OutgoingPeerID {
+		t.Fatalf("header peer id = %d", header.PeerID)
+	}
+	if header.SessionID != peer.Raw.OutgoingSessionID {
+		t.Fatalf("header session id = %d", header.SessionID)
+	}
 
 	if got := write.Payload[2]; iprotocol.Command(got&byte(iprotocol.CommandMask)) != iprotocol.CommandSendUnreliable {
 		t.Fatalf("wire command = 0x%02x", got)
@@ -178,6 +184,12 @@ func TestFlushMovesReliableCommandsInFlightWithWireMetadata(t *testing.T) {
 	}
 	if header.SentTime != 77 {
 		t.Fatalf("header sent time = %d", header.SentTime)
+	}
+	if header.PeerID != peer.Raw.OutgoingPeerID {
+		t.Fatalf("header peer id = %d", header.PeerID)
+	}
+	if header.SessionID != peer.Raw.OutgoingSessionID {
+		t.Fatalf("header session id = %d", header.SessionID)
 	}
 
 	if got := write.Payload[4]; iprotocol.Command(got&byte(iprotocol.CommandMask)) != iprotocol.CommandSendReliable {
@@ -259,6 +271,12 @@ func TestFlushMovesAckCommandFromGeneralQueueInFlightWithWireMetadata(t *testing
 	}
 	if header.SentTime != 77 {
 		t.Fatalf("header sent time = %d", header.SentTime)
+	}
+	if header.PeerID != peer.Raw.OutgoingPeerID {
+		t.Fatalf("header peer id = %d", header.PeerID)
+	}
+	if header.SessionID != peer.Raw.OutgoingSessionID {
+		t.Fatalf("header session id = %d", header.SessionID)
 	}
 }
 
