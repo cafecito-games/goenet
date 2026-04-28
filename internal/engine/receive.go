@@ -1109,7 +1109,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 		}
 	}
 
-	p.Acknowledgements.PushBack(&peer.Acknowledgement{
+	ack := &peer.Acknowledgement{
 		SentTime: uint32(sentTime),
 		Command: peer.Command{
 			Header: peer.Header{
@@ -1119,7 +1119,9 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 				ReliableSequenceNumber: header.ReliableSequenceNumber,
 			},
 		},
-	})
+	}
+	p.OutgoingDataTotal += uint32(len(marshalAcknowledgement(ack).MarshalBinary(nil)))
+	p.Acknowledgements.PushBack(ack)
 }
 
 func (h *Host) removeSentReliableCommand(p *peer.Peer, reliableSequenceNumber uint16, channelID uint8) protocol.Command {

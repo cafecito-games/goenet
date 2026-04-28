@@ -268,6 +268,171 @@ func TestServiceDisconnectsOnTimeoutMaximumBranch(t *testing.T) {
 	}
 }
 
+func TestServiceTimeoutDuringHandshakeResetsSilently(t *testing.T) {
+	tests := []struct {
+		name  string
+		state goenet.PeerState
+	}{
+		{
+			name:  "acknowledging connect",
+			state: goenet.PeerStateAcknowledgingConnect,
+		},
+		{
+			name:  "connection pending",
+			state: goenet.PeerStateConnectionPending,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, _ := newTestHost(t)
+			raw := host.AddPeer(mustConnectedPeer(t, host).Address, tt.state)
+			host.serviceTime = 32000
+
+			raw.RoundTripTime = 100
+			raw.RoundTripTimeVariance = 25
+			raw.TimeoutLimit = 32
+			raw.TimeoutMinimum = 5000
+			raw.TimeoutMaximum = 30000
+			raw.SentReliableCommands.PushBack(&ipeer.OutgoingCommand{
+				ReliableSequenceNumber: 1,
+				SentTime:               1000,
+				RoundTripTimeout:       500,
+				SendAttempts:           1,
+				Command: ipeer.Command{
+					Header: ipeer.Header{
+						Command:                iprotocol.CommandSendReliable,
+						ChannelID:              0,
+						Flags:                  iprotocol.CommandFlagAcknowledge,
+						ReliableSequenceNumber: 1,
+					},
+				},
+				Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+			})
+
+			event, err := host.Service(context.Background(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.Type != goenet.EventNone {
+				t.Fatalf("event type = %d, want %d", event.Type, goenet.EventNone)
+			}
+			if raw.State != goenet.PeerStateDisconnected {
+				t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+			}
+		})
+	}
+}
+
+func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testing.T) {
+	host, _ := newTestHost(t)
+	timedOut := mustConnectedPeer(t, host)
+	survivor := host.AddPeer(timedOut.Address, goenet.PeerStateConnected)
+
+	host.serviceTime = 32000
+	host.incomingBandwidth = 800
+	host.outgoingBandwidth = 1600
+	timedOut.RoundTripTime = 100
+	timedOut.RoundTripTimeVariance = 25
+	timedOut.TimeoutLimit = 32
+	timedOut.TimeoutMinimum = 5000
+	timedOut.TimeoutMaximum = 30000
+	timedOut.SentReliableCommands.PushBack(&ipeer.OutgoingCommand{
+		ReliableSequenceNumber: 1,
+		SentTime:               1000,
+		RoundTripTimeout:       500,
+		SendAttempts:           1,
+		Command: ipeer.Command{
+			Header: ipeer.Header{
+				Command:                iprotocol.CommandSendReliable,
+				ChannelID:              0,
+				Flags:                  iprotocol.CommandFlagAcknowledge,
+				ReliableSequenceNumber: 1,
+			},
+		},
+		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+	})
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventDisconnectTimeout {
+		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnectTimeout)
+	}
+	if !host.recalculateBandwidthLimits {
+		t.Fatal("recalculate bandwidth limits = false, want true")
+	}
+
+	host.bandwidthThrottleEpoch = 0
+	host.serviceTime = 33000
+	host.bandwidthThrottle()
+
+	if got := survivor.OutgoingCommands.Len(); got != 1 {
+		t.Fatalf("survivor outgoing command count = %d, want 1", got)
+	}
+	cmd := survivor.OutgoingCommands.Front().Value()
+	if cmd.Command.Header.Command != iprotocol.CommandBandwidthLimit {
+		t.Fatalf("command = %v, want %v", cmd.Command.Header.Command, iprotocol.CommandBandwidthLimit)
+	}
+}
+
+func TestOutgoingDataTotalTracksQueuedCommandsNotSerializedDatagrams(t *testing.T) {
+	host, _ := newTestHost(t)
+	raw := mustConnectedPeer(t, host)
+
+	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	if err := host.Send(raw, 0, packet); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := raw.OutgoingDataTotal; got != 9 {
+		t.Fatalf("outgoing data total after queue = %d, want 9", got)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := raw.OutgoingDataTotal; got != 9 {
+		t.Fatalf("outgoing data total after flush = %d, want 9", got)
+	}
+}
+
+func TestOutgoingDataTotalIncludesAcknowledgementCommandBytes(t *testing.T) {
+	host, _ := newTestHost(t)
+	raw := mustConnectedPeer(t, host)
+
+	host.queueAcknowledgement(raw, iprotocol.CommandHeader{
+		Command:                iprotocol.CommandPing,
+		ChannelID:              0,
+		ReliableSequenceNumber: 7,
+	}, 123)
+
+	expected := uint32(len(marshalAcknowledgement(raw.Acknowledgements.Front().Value()).MarshalBinary(nil)))
+	if got := raw.OutgoingDataTotal; got != expected {
+		t.Fatalf("outgoing data total after ack queue = %d, want %d", got, expected)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	expected = uint32(len(marshalAcknowledgement(&ipeer.Acknowledgement{
+		SentTime: 123,
+		Command: ipeer.Command{
+			Header: ipeer.Header{
+				Command:                iprotocol.CommandPing,
+				ChannelID:              0,
+				ReliableSequenceNumber: 7,
+			},
+		},
+	}).MarshalBinary(nil)))
+	if got := raw.OutgoingDataTotal; got != expected {
+		t.Fatalf("outgoing data total after ack flush = %d, want %d", got, expected)
+	}
+}
+
 func TestServiceBandwidthThrottleIsNoOpBeforeEpochInterval(t *testing.T) {
 	host, _ := newTestHost(t)
 	raw := mustConnectedPeer(t, host)

@@ -238,8 +238,6 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 }
 
 func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
-	p.OutgoingDataTotal += uint32(len(datagram.payload))
-
 	for _, item := range datagram.selected {
 		if item.ack != nil {
 			front := p.Acknowledgements.Front()
@@ -471,6 +469,7 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 	command.SendAttempts = 0
 	command.SentTime = 0
 	command.RoundTripTimeout = 0
+	p.OutgoingDataTotal += uint32(commandWireSize(command))
 	h.totalQueued++
 	command.QueueTime = h.totalQueued
 	command.Command.Header.ReliableSequenceNumber = reliable

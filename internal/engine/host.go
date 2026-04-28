@@ -250,6 +250,15 @@ func (h *Host) checkTimeouts() (Event, bool) {
 }
 
 func (h *Host) notifyDisconnectTimeout(p *peer.Peer) Event {
+	if p.State >= goenet.PeerStateConnectionPending {
+		h.recalculateBandwidthLimits = true
+	}
+
+	if p.State != goenet.PeerStateConnecting && p.State < goenet.PeerStateConnectionSucceeded {
+		h.resetPeer(p)
+		return Event{}
+	}
+
 	event := Event{
 		Type: goenet.EventDisconnectTimeout,
 		Peer: p,
