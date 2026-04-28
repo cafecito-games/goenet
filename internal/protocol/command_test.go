@@ -16,10 +16,15 @@ func TestConnectCommandMatchesGolden(t *testing.T) {
 	// mtu=1400, windowSize=32768, channelCount=2,
 	// incomingBandwidth=60000, outgoingBandwidth=30000,
 	// packetThrottleInterval=5000, packetThrottleAcceleration=2,
-	// packetThrottleDeceleration=3, connectID=0xdeadbeef, data=0x10203040.
+	// packetThrottleDeceleration=3, connectID=0xdeadbeef encoded raw as efbeadde,
+	// data=0x10203040.
 	wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", "connect.bin"))
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if got, want := wire[40:44], []byte{0xef, 0xbe, 0xad, 0xde}; !bytes.Equal(got, want) {
+		t.Fatalf("connectID bytes = %x, want %x", got, want)
 	}
 
 	cmd, err := protocol.ParseCommand(wire)

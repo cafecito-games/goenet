@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/cafecito-games/goenet/internal/protocol"
@@ -15,6 +16,11 @@ func TestHeaderRoundTrip(t *testing.T) {
 	}
 
 	wire := h.MarshalBinary(nil)
+	wantWire := []byte{0xa0, 0x07, 0x04, 0xd2}
+	if !bytes.Equal(wire, wantWire) {
+		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)
+	}
+
 	got, err := protocol.ParseHeader(wire)
 	if err != nil {
 		t.Fatal(err)

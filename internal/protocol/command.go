@@ -65,7 +65,8 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint32(dst[start+28:start+32], c.PacketThrottleInterval)
 	binary.BigEndian.PutUint32(dst[start+32:start+36], c.PacketThrottleAcceleration)
 	binary.BigEndian.PutUint32(dst[start+36:start+40], c.PacketThrottleDeceleration)
-	binary.BigEndian.PutUint32(dst[start+40:start+44], c.ConnectID)
+	// The target ENet fork copies connectID straight through without host-to-net conversion.
+	binary.LittleEndian.PutUint32(dst[start+40:start+44], c.ConnectID)
 	binary.BigEndian.PutUint32(dst[start+44:start+48], c.Data)
 	return dst
 }
@@ -117,7 +118,7 @@ func parseConnect(src []byte) (Connect, error) {
 		PacketThrottleInterval:     binary.BigEndian.Uint32(src[28:32]),
 		PacketThrottleAcceleration: binary.BigEndian.Uint32(src[32:36]),
 		PacketThrottleDeceleration: binary.BigEndian.Uint32(src[36:40]),
-		ConnectID:                  binary.BigEndian.Uint32(src[40:44]),
+		ConnectID:                  binary.LittleEndian.Uint32(src[40:44]),
 		Data:                       binary.BigEndian.Uint32(src[44:48]),
 	}, nil
 }
