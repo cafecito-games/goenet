@@ -1,8 +1,6 @@
 package peer
 
-import (
-	"github.com/cafecito-games/goenet"
-)
+import "github.com/cafecito-games/goenet/internal/core"
 
 // Peer carries the internal ENet-oriented state for a remote endpoint.
 type Peer struct {
@@ -13,8 +11,8 @@ type Peer struct {
 	OutgoingSessionID              uint8
 	IncomingSessionID              uint8
 	MTU                            uint32
-	Address                        goenet.Address
-	State                          goenet.PeerState
+	Address                        core.Address
+	State                          core.PeerState
 	Channels                       []Channel
 	IncomingBandwidth              uint32
 	OutgoingBandwidth              uint32

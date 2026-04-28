@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
@@ -80,7 +80,7 @@ func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
-func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
+func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if err := h.validatePacketSize(p, packet); err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goene
 		Packet:         packet,
 	}
 
-	if packet.Flags&goenet.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber >= 0xFFFF {
+	if packet.Flags&core.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber >= 0xFFFF {
 		command.Command = peer.Command{
 			Header: peer.Header{
 				Command:   protocol.CommandSendReliable,
@@ -205,7 +205,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 	if h.config.Compressor != nil {
 		compressed := make([]byte, len(body))
-		n, err := h.config.Compressor.Compress([]goenet.Buffer{{Data: body}}, len(body), compressed)
+		n, err := h.config.Compressor.Compress([]core.Buffer{{Data: body}}, len(body), compressed)
 		if err != nil {
 			return preparedDatagram{}, false, err
 		}
@@ -221,7 +221,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	if h.config.Checksum != nil {
 		checksumBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(checksumBytes, outgoingChecksumSeed(p))
-		sum := h.config.Checksum.Checksum([]goenet.Buffer{
+		sum := h.config.Checksum.Checksum([]core.Buffer{
 			{Data: headerBytes},
 			{Data: checksumBytes},
 			{Data: body},
@@ -245,8 +245,8 @@ func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 				panic("engine: acknowledgement queue commit order mismatch")
 			}
 			p.Acknowledgements.Remove(front)
-			if item.ack.Command.Header.Command == protocol.CommandDisconnect && p.State == goenet.PeerStateAcknowledgingDisconnect {
-				p.State = goenet.PeerStateZombie
+			if item.ack.Command.Header.Command == protocol.CommandDisconnect && p.State == core.PeerStateAcknowledgingDisconnect {
+				p.State = core.PeerStateZombie
 				h.enqueuePeerDispatch(p)
 			}
 			continue
@@ -394,8 +394,8 @@ func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
 	}
 }
 
-func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {
-	if packet.Flags&goenet.PacketFlagUnsequenced != 0 {
+func (h *Host) validatePacketSize(p *peer.Peer, packet *core.Packet) error {
+	if packet.Flags&core.PacketFlagUnsequenced != 0 {
 		return fmt.Errorf("engine: unsequenced packets are not supported in task 5")
 	}
 	if len(packet.Data) > math.MaxUint16 {
@@ -408,10 +408,10 @@ func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {
 	return nil
 }
 
-func (h *Host) maxPacketDataLength(p *peer.Peer, flags goenet.PacketFlag) int {
+func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
 	commandSize := sendUnreliableCommandSize
 	requiresSentTime := false
-	if flags&goenet.PacketFlagReliable != 0 {
+	if flags&core.PacketFlagReliable != 0 {
 		requiresSentTime = true
 		commandSize = sendReliableCommandSize
 	}
@@ -520,7 +520,7 @@ func headerOverhead(withSentTime, withChecksum bool) int {
 	return size
 }
 
-func checksumSize(checksummer goenet.Checksummer) int {
+func checksumSize(checksummer core.Checksummer) int {
 	if checksummer == nil {
 		return 0
 	}

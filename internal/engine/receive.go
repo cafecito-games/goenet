@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/netip"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/timeutil"
@@ -33,11 +33,11 @@ const (
 )
 
 type Event struct {
-	Type      goenet.EventType
+	Type      core.EventType
 	Peer      *peer.Peer
 	ChannelID uint8
 	Data      uint32
-	Packet    *goenet.Packet
+	Packet    *core.Packet
 }
 
 type peerRuntime struct {
@@ -111,7 +111,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 		if err != nil {
 			return err
 		}
-		if decision.Result == goenet.InterceptResultConsume && decision.Event != nil {
+		if decision.Result == core.InterceptResultConsume && decision.Event != nil {
 			h.intercepted = &Event{
 				Type:      decision.Event.Type,
 				ChannelID: decision.Event.ChannelID,
@@ -119,7 +119,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 				Packet:    decision.Event.Packet,
 			}
 		}
-		if decision.Result == goenet.InterceptResultConsume {
+		if decision.Result == core.InterceptResultConsume {
 			return nil
 		}
 	}
@@ -175,7 +175,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 		checksumOffset := protocolHeaderSize
 		desired := binary.LittleEndian.Uint32(workingPayload[checksumOffset : checksumOffset+4])
 		binary.LittleEndian.PutUint32(workingPayload[checksumOffset:checksumOffset+4], incomingChecksumSeed(currentPeer))
-		if h.config.Checksum.Checksum([]goenet.Buffer{{Data: workingPayload}}) != desired {
+		if h.config.Checksum.Checksum([]core.Buffer{{Data: workingPayload}}) != desired {
 			return nil
 		}
 	}
@@ -224,7 +224,7 @@ func (h *Host) lookupPeer(header protocol.Header, addr netip.AddrPort) (*peer.Pe
 	if candidate == nil {
 		return nil, false
 	}
-	if candidate.State == goenet.PeerStateDisconnected || candidate.State == goenet.PeerStateZombie {
+	if candidate.State == core.PeerStateDisconnected || candidate.State == core.PeerStateZombie {
 		return nil, false
 	}
 	if candidate.Address.AddrPort() != addr {
@@ -329,7 +329,7 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 
 	var selected *peer.Peer
 	for _, candidate := range h.peers {
-		if candidate != nil && candidate.State == goenet.PeerStateDisconnected {
+		if candidate != nil && candidate.State == core.PeerStateDisconnected {
 			selected = candidate
 			break
 		}
@@ -338,7 +338,7 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 		return nil
 	}
 
-	address, err := goenet.NewAddress(addr, 0)
+	address, err := core.NewAddress(addr, 0)
 	if err != nil {
 		return nil
 	}
@@ -349,7 +349,7 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 	}
 
 	selected.Address = address
-	selected.State = goenet.PeerStateAcknowledgingConnect
+	selected.State = core.PeerStateAcknowledgingConnect
 	selected.ConnectID = command.ConnectID
 	selected.OutgoingPeerID = command.OutgoingPeerID
 	selected.MTU = minUint32(h.config.MTU, clampUint32(command.MTU, protocol.MinimumMTU, protocol.MaximumMTU))
@@ -404,13 +404,13 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 }
 
 func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect) inboundDisposition {
-	if p.State != goenet.PeerStateConnecting {
+	if p.State != core.PeerStateConnecting {
 		return inboundIgnore
 	}
 
 	runtime := h.runtime[p]
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
-		p.State = goenet.PeerStateZombie
+		p.State = core.PeerStateZombie
 		h.enqueuePeerDispatch(p)
 		return inboundReject
 	}
@@ -418,7 +418,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 		command.PacketThrottleAcceleration != p.PacketThrottleAcceleration ||
 		command.PacketThrottleDeceleration != p.PacketThrottleDeceleration ||
 		command.ConnectID != p.ConnectID {
-		p.State = goenet.PeerStateZombie
+		p.State = core.PeerStateZombie
 		h.enqueuePeerDispatch(p)
 		return inboundReject
 	}
@@ -441,7 +441,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 }
 
 func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) bool {
-	if p.State == goenet.PeerStateDisconnected || p.State == goenet.PeerStateZombie {
+	if p.State == core.PeerStateDisconnected || p.State == core.PeerStateZombie {
 		return true
 	}
 
@@ -489,7 +489,7 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 	p.EarliestTimeout = 0
 
 	commandNumber := h.removeSentReliableCommand(p, command.ReceivedReliableSequenceNumber, command.Header.ChannelID)
-	if p.State == goenet.PeerStateAcknowledgingConnect {
+	if p.State == core.PeerStateAcknowledgingConnect {
 		if commandNumber != protocol.CommandVerifyConnect {
 			return false
 		}
@@ -500,23 +500,23 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 }
 
 func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inboundDisposition {
-	if p.State == goenet.PeerStateDisconnected || p.State == goenet.PeerStateZombie || p.State == goenet.PeerStateAcknowledgingDisconnect {
+	if p.State == core.PeerStateDisconnected || p.State == core.PeerStateZombie || p.State == core.PeerStateAcknowledgingDisconnect {
 		return inboundIgnore
 	}
 
 	h.clearPeerQueues(p)
 
 	switch p.State {
-	case goenet.PeerStateConnectionSucceeded, goenet.PeerStateDisconnecting, goenet.PeerStateConnecting:
+	case core.PeerStateConnectionSucceeded, core.PeerStateDisconnecting, core.PeerStateConnecting:
 		h.runtime[p].eventData = command.Data
-		p.State = goenet.PeerStateZombie
+		p.State = core.PeerStateZombie
 		h.enqueuePeerDispatch(p)
-	case goenet.PeerStateConnected, goenet.PeerStateDisconnectLater:
+	case core.PeerStateConnected, core.PeerStateDisconnectLater:
 		h.runtime[p].eventData = command.Data
 		if command.Header.Flags&protocol.CommandFlagAcknowledge != 0 {
-			p.State = goenet.PeerStateAcknowledgingDisconnect
+			p.State = core.PeerStateAcknowledgingDisconnect
 		} else {
-			p.State = goenet.PeerStateZombie
+			p.State = core.PeerStateZombie
 			h.enqueuePeerDispatch(p)
 		}
 	default:
@@ -534,9 +534,9 @@ func (h *Host) handleSendReliable(p *peer.Peer, command protocol.SendReliable) i
 		return inboundReject
 	}
 
-	packet := &goenet.Packet{
+	packet := &core.Packet{
 		Data:  append([]byte(nil), command.Data...),
-		Flags: goenet.PacketFlagReliable,
+		Flags: core.PacketFlagReliable,
 	}
 	cmd := &peer.IncomingCommand{
 		ReliableSequenceNumber: command.Header.ReliableSequenceNumber,
@@ -562,7 +562,7 @@ func (h *Host) handleSendUnreliable(p *peer.Peer, command protocol.SendUnreliabl
 		return inboundReject
 	}
 
-	packet := &goenet.Packet{Data: append([]byte(nil), command.Data...)}
+	packet := &core.Packet{Data: append([]byte(nil), command.Data...)}
 	cmd := &peer.IncomingCommand{
 		ReliableSequenceNumber:   command.Header.ReliableSequenceNumber,
 		UnreliableSequenceNumber: command.UnreliableSequenceNumber,
@@ -587,7 +587,7 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 	if len(command.Data) > int(h.config.MaximumPacketSize) {
 		return inboundReject
 	}
-	if p.State == goenet.PeerStateDisconnectLater {
+	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
 
@@ -621,9 +621,9 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 				Flags:     command.Header.Flags,
 			},
 		},
-		Packet: &goenet.Packet{
+		Packet: &core.Packet{
 			Data:  append([]byte(nil), command.Data...),
-			Flags: goenet.PacketFlagUnsequenced,
+			Flags: core.PacketFlagUnsequenced,
 		},
 	}
 	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
@@ -637,7 +637,7 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) i
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
 		return inboundReject
 	}
-	if p.State == goenet.PeerStateDisconnectLater {
+	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
 
@@ -672,9 +672,9 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) i
 					ReliableSequenceNumber: startSequence,
 				},
 			},
-			Packet: &goenet.Packet{
+			Packet: &core.Packet{
 				Data:  make([]byte, int(command.TotalLength)),
-				Flags: goenet.PacketFlagReliable,
+				Flags: core.PacketFlagReliable,
 			},
 		}
 		start.SetFragmentCount(command.FragmentCount)
@@ -698,7 +698,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
 		return inboundReject
 	}
-	if p.State == goenet.PeerStateDisconnectLater {
+	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
 
@@ -737,7 +737,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 					ReliableSequenceNumber: command.Header.ReliableSequenceNumber,
 				},
 			},
-			Packet: &goenet.Packet{Data: make([]byte, int(command.TotalLength))},
+			Packet: &core.Packet{Data: make([]byte, int(command.TotalLength))},
 		}
 		start.SetFragmentCount(command.FragmentCount)
 		p.AddWaitingData(command.TotalLength)
@@ -757,7 +757,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 }
 
 func (h *Host) handleBandwidthLimit(p *peer.Peer, command protocol.BandwidthLimit) bool {
-	if p.State != goenet.PeerStateConnected && p.State != goenet.PeerStateDisconnectLater {
+	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
 		return false
 	}
 	p.IncomingBandwidth = command.IncomingBandwidth
@@ -767,7 +767,7 @@ func (h *Host) handleBandwidthLimit(p *peer.Peer, command protocol.BandwidthLimi
 }
 
 func (h *Host) handleThrottleConfigure(p *peer.Peer, command protocol.ThrottleConfigure) bool {
-	if p.State != goenet.PeerStateConnected && p.State != goenet.PeerStateDisconnectLater {
+	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
 		return false
 	}
 	p.PacketThrottleInterval = command.PacketThrottleInterval
@@ -777,7 +777,7 @@ func (h *Host) handleThrottleConfigure(p *peer.Peer, command protocol.ThrottleCo
 }
 
 func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) inboundDisposition {
-	if p.State == goenet.PeerStateDisconnectLater {
+	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
 	channel := &p.Channels[cmd.Command.Header.ChannelID]
@@ -808,7 +808,7 @@ func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingComm
 }
 
 func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) inboundDisposition {
-	if p.State == goenet.PeerStateDisconnectLater {
+	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
 	channel := &p.Channels[cmd.Command.Header.ChannelID]
@@ -926,14 +926,14 @@ func (h *Host) dispatchEvent() (Event, bool) {
 		delete(h.dispatchSet, p)
 
 		switch p.State {
-		case goenet.PeerStateConnectionPending, goenet.PeerStateConnectionSucceeded:
-			p.State = goenet.PeerStateConnected
+		case core.PeerStateConnectionPending, core.PeerStateConnectionSucceeded:
+			p.State = core.PeerStateConnected
 			return Event{
-				Type: goenet.EventConnect,
+				Type: core.EventConnect,
 				Peer: p,
 				Data: h.runtime[p].eventData,
 			}, true
-		case goenet.PeerStateConnected:
+		case core.PeerStateConnected:
 			cmd := p.PopDispatchedCommand()
 			if cmd == nil || cmd.Packet == nil {
 				continue
@@ -943,16 +943,16 @@ func (h *Host) dispatchEvent() (Event, bool) {
 				h.enqueuePeerDispatch(p)
 			}
 			return Event{
-				Type:      goenet.EventReceive,
+				Type:      core.EventReceive,
 				Peer:      p,
 				ChannelID: cmd.Command.Header.ChannelID,
 				Packet:    cmd.Packet,
 			}, true
-		case goenet.PeerStateZombie:
+		case core.PeerStateZombie:
 			data := h.runtime[p].eventData
 			h.resetPeer(p)
 			return Event{
-				Type: goenet.EventDisconnect,
+				Type: core.EventDisconnect,
 				Peer: p,
 				Data: data,
 			}, true
@@ -982,10 +982,10 @@ func (h *Host) removePeerDispatch(p *peer.Peer) {
 }
 
 func (h *Host) notifyConnect(p *peer.Peer) {
-	if p.State == goenet.PeerStateConnecting {
-		p.State = goenet.PeerStateConnectionSucceeded
+	if p.State == core.PeerStateConnecting {
+		p.State = core.PeerStateConnectionSucceeded
 	} else {
-		p.State = goenet.PeerStateConnectionPending
+		p.State = core.PeerStateConnectionPending
 	}
 	h.enqueuePeerDispatch(p)
 }
@@ -1082,16 +1082,16 @@ func (h *Host) resetPeer(p *peer.Peer) {
 	connectID := p.ConnectID
 
 	h.removePeerDispatch(p)
-	h.initializePeer(p, int(incomingPeerID), goenet.Address{}, goenet.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
+	h.initializePeer(p, int(incomingPeerID), core.Address{}, core.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
 	p.ConnectID = connectID
 	h.runtime[p] = defaultPeerRuntime()
 }
 
 func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader, sentTime uint16) {
 	switch p.State {
-	case goenet.PeerStateDisconnecting, goenet.PeerStateAcknowledgingConnect, goenet.PeerStateDisconnected, goenet.PeerStateZombie:
+	case core.PeerStateDisconnecting, core.PeerStateAcknowledgingConnect, core.PeerStateDisconnected, core.PeerStateZombie:
 		return
-	case goenet.PeerStateAcknowledgingDisconnect:
+	case core.PeerStateAcknowledgingDisconnect:
 		if header.Command != protocol.CommandDisconnect {
 			return
 		}
@@ -1225,7 +1225,7 @@ func canReceiveOnChannel(p *peer.Peer, channelID uint8) bool {
 	if int(channelID) >= len(p.Channels) {
 		return false
 	}
-	return p.State == goenet.PeerStateConnected || p.State == goenet.PeerStateDisconnectLater
+	return p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater
 }
 
 func reliableSequenceWithinWindow(anchor, sequence uint16) bool {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	ipeer "github.com/cafecito-games/goenet/internal/peer"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/testsupport"
@@ -737,7 +738,7 @@ func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
 func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
 	cfg := goenet.DefaultConfig()
 	sock := testsupport.NewFakeSocket()
-	host := NewHost(cfg, sock, 0)
+	host := NewHost(coreConfigFromPublic(cfg), sock, 0)
 	peer := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
 
 	if got := len(peer.Channels); got != int(iprotocol.MaximumChannelCount) {
@@ -755,7 +756,7 @@ func newReceiveHost(t *testing.T, configure func(*goenet.Config)) (*Host, *tests
 	}
 
 	sock := testsupport.NewFakeSocket()
-	return NewHost(cfg, sock, 77), sock
+	return NewHost(coreConfigFromPublic(cfg), sock, 77), sock
 }
 
 func mustAddress(t *testing.T, value string) goenet.Address {
@@ -789,6 +790,48 @@ func mustPeerInState(t *testing.T, host *Host, state goenet.PeerState) *ipeer.Pe
 
 	t.Fatalf("expected peer in state %d", state)
 	return nil
+}
+
+func coreConfigFromPublic(cfg goenet.Config) core.Config {
+	coreCfg := core.DefaultConfig()
+	coreCfg.PeerCount = cfg.PeerCount
+	coreCfg.ChannelLimit = cfg.ChannelLimit
+	coreCfg.MTU = cfg.MTU
+	coreCfg.MaximumPacketSize = cfg.MaximumPacketSize
+	coreCfg.MaximumWaitingData = cfg.MaximumWaitingData
+	coreCfg.Checksum = cfg.Checksum
+	coreCfg.Compressor = cfg.Compressor
+	if cfg.Intercept != nil {
+		coreCfg.Intercept = interceptAdapter{inner: cfg.Intercept}
+	}
+
+	return coreCfg
+}
+
+type interceptAdapter struct {
+	inner goenet.Interceptor
+}
+
+func (a interceptAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
+	decision, err := a.inner.Intercept(addr, payload)
+	if err != nil {
+		return core.InterceptDecision{}, err
+	}
+
+	var event *core.Event
+	if decision.Event != nil {
+		event = &core.Event{
+			Type:      core.EventType(decision.Event.Type),
+			ChannelID: decision.Event.ChannelID,
+			Data:      decision.Event.Data,
+			Packet:    decision.Event.Packet,
+		}
+	}
+
+	return core.InterceptDecision{
+		Result: core.InterceptResult(decision.Result),
+		Event:  event,
+	}, nil
 }
 
 func mustSingleCommand(t *testing.T, payload []byte) (iprotocol.Header, iprotocol.PacketCommand) {

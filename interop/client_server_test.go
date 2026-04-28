@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 )
 
@@ -29,7 +30,7 @@ func TestGoServerTalksToCClient(t *testing.T) {
 	binary := buildHarness(t)
 
 	socket := newUDPSocket(t)
-	host := engine.NewHost(goenet.Config{
+	host := engine.NewHost(core.Config{
 		PeerCount:    8,
 		ChannelLimit: 1,
 	}, socket, 0)

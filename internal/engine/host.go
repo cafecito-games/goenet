@@ -3,7 +3,7 @@ package engine
 import (
 	"fmt"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/socket"
@@ -26,7 +26,7 @@ const (
 
 // Host carries the minimal outbound engine state for queueing and flush tests.
 type Host struct {
-	config                     goenet.Config
+	config                     core.Config
 	socket                     socket.DatagramSocket
 	peers                      []*peer.Peer
 	serviceTime                uint32
@@ -42,8 +42,8 @@ type Host struct {
 	intercepted                *Event
 }
 
-func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
-	cfg := goenet.DefaultConfig()
+func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
+	cfg := core.DefaultConfig()
 	if config.PeerCount != 0 {
 		cfg.PeerCount = config.PeerCount
 	}
@@ -86,9 +86,9 @@ func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint3
 	return host
 }
 
-func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
+func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 	for index, candidate := range h.peers {
-		if candidate != nil && candidate.State == goenet.PeerStateDisconnected {
+		if candidate != nil && candidate.State == core.PeerStateDisconnected {
 			return h.configurePeer(candidate, index, addr, state)
 		}
 	}
@@ -100,14 +100,14 @@ func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
 	return p
 }
 
-func (h *Host) Send(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
+func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
 	if packet == nil {
 		return fmt.Errorf("engine: nil packet")
 	}
-	if p.State != goenet.PeerStateConnected {
+	if p.State != core.PeerStateConnected {
 		return fmt.Errorf("engine: peer not connected")
 	}
 	if int(channelID) >= len(p.Channels) {
@@ -122,19 +122,19 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *goenet.Packet) error 
 
 func (h *Host) newPeerSlot(index int) *peer.Peer {
 	p := &peer.Peer{}
-	h.initializePeer(p, index, goenet.Address{}, goenet.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
+	h.initializePeer(p, index, core.Address{}, core.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
 	h.runtime[p] = defaultPeerRuntime()
 	return p
 }
 
-func (h *Host) configurePeer(p *peer.Peer, index int, addr goenet.Address, state goenet.PeerState) *peer.Peer {
+func (h *Host) configurePeer(p *peer.Peer, index int, addr core.Address, state core.PeerState) *peer.Peer {
 	channels := make([]peer.Channel, h.config.ChannelLimit)
 	for i := range channels {
 		channels[i] = peer.NewChannel()
 	}
 
 	outgoingPeerID := uint16(index + 1)
-	if state == goenet.PeerStateConnecting {
+	if state == core.PeerStateConnecting {
 		outgoingPeerID = protocolMaximumPeerID
 	}
 
@@ -147,8 +147,8 @@ func (h *Host) configurePeer(p *peer.Peer, index int, addr goenet.Address, state
 func (h *Host) initializePeer(
 	p *peer.Peer,
 	index int,
-	addr goenet.Address,
-	state goenet.PeerState,
+	addr core.Address,
+	state core.PeerState,
 	outgoingPeerID uint16,
 	incomingSessionID uint8,
 	outgoingSessionID uint8,
@@ -198,7 +198,7 @@ func (h *Host) updateNextTimeout(p *peer.Peer) {
 
 func (h *Host) checkTimeouts() (Event, bool) {
 	for _, p := range h.peers {
-		if p == nil || p.State == goenet.PeerStateDisconnected || p.State == goenet.PeerStateZombie {
+		if p == nil || p.State == core.PeerStateDisconnected || p.State == core.PeerStateZombie {
 			continue
 		}
 
@@ -250,17 +250,17 @@ func (h *Host) checkTimeouts() (Event, bool) {
 }
 
 func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
-	if p.State >= goenet.PeerStateConnectionPending {
+	if p.State >= core.PeerStateConnectionPending {
 		h.recalculateBandwidthLimits = true
 	}
 
-	if p.State != goenet.PeerStateConnecting && p.State < goenet.PeerStateConnectionSucceeded {
+	if p.State != core.PeerStateConnecting && p.State < core.PeerStateConnectionSucceeded {
 		h.resetPeer(p)
 		return Event{}, false
 	}
 
 	event := Event{
-		Type: goenet.EventDisconnectTimeout,
+		Type: core.EventDisconnectTimeout,
 		Peer: p,
 	}
 	h.resetPeer(p)
@@ -434,7 +434,7 @@ func (h *Host) bandwidthLimitedPeerCount() uint32 {
 }
 
 func isBandwidthThrottlePeer(p *peer.Peer) bool {
-	return p != nil && (p.State == goenet.PeerStateConnected || p.State == goenet.PeerStateDisconnectLater)
+	return p != nil && (p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater)
 }
 
 func lessOutgoingCommand(a, b *peer.OutgoingCommand) bool {

@@ -54,3 +54,18 @@ func TestPacketFlagValuesMatchENet(t *testing.T) {
 		t.Fatalf("PacketFlagUnsequenced = %d", goenet.PacketFlagUnsequenced)
 	}
 }
+
+func TestPublicPackageStillExposesConfigAndPacketTypes(t *testing.T) {
+	var cfg goenet.Config
+	packet := goenet.Packet{Data: []byte("x")}
+
+	if cfg.MTU == 0 {
+		cfg = goenet.DefaultConfig()
+	}
+	if len(packet.Data) != 1 {
+		t.Fatalf("packet length = %d, want 1", len(packet.Data))
+	}
+	if cfg.MTU == 0 {
+		t.Fatal("default config should set MTU")
+	}
+}

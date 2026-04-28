@@ -1,19 +1,21 @@
 package goenet
 
+import "github.com/cafecito-games/goenet/internal/core"
+
 // PeerState mirrors ENetPeerState ordinal values.
-type PeerState uint8
+type PeerState = core.PeerState
 
 const (
-	PeerStateDisconnected PeerState = iota
-	PeerStateConnecting
-	PeerStateAcknowledgingConnect
-	PeerStateConnectionPending
-	PeerStateConnectionSucceeded
-	PeerStateConnected
-	PeerStateDisconnectLater
-	PeerStateDisconnecting
-	PeerStateAcknowledgingDisconnect
-	PeerStateZombie
+	PeerStateDisconnected            = core.PeerStateDisconnected
+	PeerStateConnecting              = core.PeerStateConnecting
+	PeerStateAcknowledgingConnect    = core.PeerStateAcknowledgingConnect
+	PeerStateConnectionPending       = core.PeerStateConnectionPending
+	PeerStateConnectionSucceeded     = core.PeerStateConnectionSucceeded
+	PeerStateConnected               = core.PeerStateConnected
+	PeerStateDisconnectLater         = core.PeerStateDisconnectLater
+	PeerStateDisconnecting           = core.PeerStateDisconnecting
+	PeerStateAcknowledgingDisconnect = core.PeerStateAcknowledgingDisconnect
+	PeerStateZombie                  = core.PeerStateZombie
 )
 
 // Peer is the public handle for a remote endpoint.

@@ -1,15 +1,14 @@
 package goenet
 
+import "github.com/cafecito-games/goenet/internal/core"
+
 // PacketFlag controls how a packet is sent or interpreted.
-type PacketFlag uint32
+type PacketFlag = core.PacketFlag
 
 const (
-	PacketFlagReliable    PacketFlag = 1 << 0
-	PacketFlagUnsequenced PacketFlag = 1 << 1
+	PacketFlagReliable    = core.PacketFlagReliable
+	PacketFlagUnsequenced = core.PacketFlagUnsequenced
 )
 
 // Packet is the public packet payload value type.
-type Packet struct {
-	Data  []byte
-	Flags PacketFlag
-}
+type Packet = core.Packet

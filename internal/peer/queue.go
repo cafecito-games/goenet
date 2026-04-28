@@ -1,7 +1,7 @@
 package peer
 
 import (
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
@@ -30,7 +30,7 @@ type OutgoingCommand struct {
 	FragmentLength           uint16
 	SendAttempts             uint16
 	Command                  Command
-	Packet                   *goenet.Packet
+	Packet                   *core.Packet
 }
 
 // IncomingCommand is the queued receive state held before dispatch.
@@ -41,7 +41,7 @@ type IncomingCommand struct {
 	FragmentCount            uint32
 	FragmentsRemaining       uint32
 	Fragments                []uint32
-	Packet                   *goenet.Packet
+	Packet                   *core.Packet
 }
 
 // SetFragmentCount resets fragment bookkeeping for a queued inbound command.
