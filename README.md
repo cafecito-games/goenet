@@ -12,7 +12,7 @@ This repository is the baseline for a Go-native ENet-style transport layer with:
 
 ## Compatibility Target
 
-`goenet` targets wire-level interoperability with the upstream ENet project at `https://github.com/lsalzman/enet`, aligned to the ENet `2.6.5` constants and protocol layout used by the project reference build. For local development, contributors may keep a checkout or derived single-header mirror of that upstream source, but the canonical compatibility target is the upstream ENet repository plus the `2.6.5` protocol/version details. The initial scaffolding in this repository establishes the package, CI, linting, and development workflow before protocol features are implemented.
+`goenet` targets wire-level interoperability with the ENet fork checked out locally at `/Users/christian/CafecitoGames/enet`. That fork's single-header `include/enet.h` is the development source of truth used by this repository for interoperability verification, including the connect and packet-exchange harness in [`interop/`](./interop). The protocol constants and layout in `goenet` are still aligned with the ENet `2.6.5` era wire format exercised by that fork.
 
 ## Installation
 
@@ -20,69 +20,34 @@ This repository is the baseline for a Go-native ENet-style transport layer with:
 go get github.com/cafecito-games/goenet
 ```
 
-The module currently provides only the baseline package scaffold and will grow as protocol functionality is implemented.
+The module currently exposes the data types and compatibility constants needed by the engine and tests. Public host construction, listen/connect, and service-loop APIs are not exported yet.
 
-## Minimal Example
+## Current Public Surface
 
-The transport implementation is not in place yet. The following is illustrative pseudocode showing the intended future client/server API shape around host, listen, connect, and service loops; these symbols do not exist in the current package surface yet:
+Server-side configuration currently looks like this:
 
 ```go
-package main
+cfg := goenet.DefaultConfig()
+cfg.PeerCount = 64
+cfg.ChannelLimit = 2
+```
 
-import (
-	"log"
-	"time"
+Packets and event values already have stable public types:
 
-	"github.com/cafecito-games/goenet"
-)
+```go
+packet := goenet.Packet{
+	Data:  []byte("hello"),
+	Flags: goenet.PacketFlagReliable,
+}
 
-func main() {
-	server, err := goenet.Listen(":7777", goenet.Config{
-		Peers:    64,
-		Channels: 2,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer server.Close()
-
-	client, err := goenet.NewHost(goenet.Config{
-		Channels: 2,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer client.Close()
-
-	peer, err := client.Connect("127.0.0.1:7777", goenet.ConnectOptions{
-		Channels: 2,
-		Data:     42,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for {
-		if event, err := server.Service(5 * time.Millisecond); err == nil && event != nil {
-			switch event.Type {
-			case goenet.EventConnect:
-				log.Printf("server: peer connected: %v", event.Peer)
-			case goenet.EventReceive:
-				log.Printf("server: packet on channel %d", event.ChannelID)
-			}
-		}
-
-		if event, err := client.Service(5 * time.Millisecond); err == nil && event != nil {
-			switch event.Type {
-			case goenet.EventConnect:
-				_ = peer.Send(0, []byte("hello"))
-			case goenet.EventDisconnect:
-				return
-			}
-		}
-	}
+event := goenet.Event{
+	Type:      goenet.EventReceive,
+	ChannelID: 0,
+	Packet:    &packet,
 }
 ```
+
+The example coverage in [`examples/`](./examples) is intentionally limited to this real package surface. Interoperability tests that exercise live connect and packet exchange are in [`interop/`](./interop) and currently drive `internal/engine` directly until the public host API exists.
 
 ## Development
 
@@ -99,3 +64,9 @@ Available baseline tasks include:
 - `task test`
 - `task test:cover`
 - `task build`
+
+For cross-language interoperability checks against the local ENet fork:
+
+```sh
+go test ./interop -count=1
+```
