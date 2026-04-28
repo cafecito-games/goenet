@@ -12,7 +12,7 @@ This repository is the baseline for a Go-native ENet-style transport layer with:
 
 ## Compatibility Target
 
-`goenet` targets wire-level interoperability with the upstream ENet implementation in `~/CafecitoGames/enet`, specifically the single-header fork exposing ENet `2.6.5` constants and protocol layout. The initial scaffolding in this repository establishes the package, CI, linting, and development workflow before protocol features are implemented.
+`goenet` targets wire-level interoperability with the upstream ENet project at `https://github.com/lsalzman/enet`, aligned to the ENet `2.6.5` constants and protocol layout used by the project reference build. For local development, contributors may keep a checkout or derived single-header mirror of that upstream source, but the canonical compatibility target is the upstream ENet repository plus the `2.6.5` protocol/version details. The initial scaffolding in this repository establishes the package, CI, linting, and development workflow before protocol features are implemented.
 
 ## Installation
 
