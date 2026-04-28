@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/cafecito-games/goenet"
@@ -101,6 +103,41 @@ func TestFlushWritesOnlyWhenCommandsAreQueued(t *testing.T) {
 	}
 }
 
+func TestFlushWithoutReliableCommandsOmitsSentTimeMetadata(t *testing.T) {
+	host, sock := newTestHost(t)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	packet := &goenet.Packet{Data: []byte("abc")}
+	if err := host.Send(peer.Raw, 0, packet); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := sock.MustWrite(t, 0)
+	header, err := iprotocol.ParseHeader(write.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Flags != 0 {
+		t.Fatalf("header flags = 0x%04x", header.Flags)
+	}
+	if header.SentTime != 0 {
+		t.Fatalf("header sent time = %d", header.SentTime)
+	}
+
+	if got := write.Payload[2]; iprotocol.Command(got&byte(iprotocol.CommandMask)) != iprotocol.CommandSendUnreliable {
+		t.Fatalf("wire command = 0x%02x", got)
+	}
+	if got := binary.BigEndian.Uint16(write.Payload[4:6]); got != 0 {
+		t.Fatalf("wire reliable sequence = %d", got)
+	}
+	if got := binary.BigEndian.Uint16(write.Payload[6:8]); got != 1 {
+		t.Fatalf("wire unreliable sequence = %d", got)
+	}
+}
+
 func TestFlushMovesReliableCommandsInFlightWithWireMetadata(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: host.MustConnectedPeer()}
@@ -160,6 +197,28 @@ func TestFlushMovesReliableCommandsInFlightWithWireMetadata(t *testing.T) {
 	}
 }
 
+func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
+	host, _ := newTestHost(t)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	packet := &goenet.Packet{
+		Data: bytesOfLen(int(host.config.MTU-9), 'x'),
+	}
+	err := host.Send(peer.Raw, 0, packet)
+	if err == nil {
+		t.Fatal("expected oversize packet error")
+	}
+	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.SentReliableCount(); got != 0 {
+		t.Fatalf("SentReliableCount = %d", got)
+	}
+}
+
 func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
@@ -175,6 +234,22 @@ func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	host := NewHost(cfg, sock, 77)
 	host.AddPeer(addr, goenet.PeerStateConnected)
 	return host, sock
+}
+
+func bytesOfLen(n int, b byte) []byte {
+	if n <= 0 {
+		return nil
+	}
+
+	if n > math.MaxInt32 {
+		panic("test payload too large")
+	}
+
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = b
+	}
+	return buf
 }
 
 type testPeer struct {

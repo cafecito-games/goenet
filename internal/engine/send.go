@@ -4,10 +4,18 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
+)
+
+const (
+	protocolHeaderSizeWithoutSentTime = 2
+	protocolHeaderSizeWithSentTime    = 4
+	sendReliableCommandSize           = 6
+	sendUnreliableCommandSize         = 8
 )
 
 type sendReliablePayload struct {
@@ -47,6 +55,10 @@ func (p sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 }
 
 func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
+	if err := h.validatePacketSize(packet); err != nil {
+		return err
+	}
+
 	channel := &p.Channels[channelID]
 	command := &peer.OutgoingCommand{
 		FragmentLength: uint16(len(packet.Data)),
@@ -129,10 +141,12 @@ func (h *Host) flushPeer(ctx context.Context, p *peer.Peer) ([]byte, bool, error
 		return nil, false, nil
 	}
 
-	payload := protocol.Header{
-		Flags:    protocol.HeaderFlagSentTime,
-		SentTime: uint16(h.serviceTime),
-	}.MarshalBinary(nil)
+	header := protocol.Header{}
+	if reliableFront != nil {
+		header.Flags = protocol.HeaderFlagSentTime
+		header.SentTime = uint16(h.serviceTime)
+	}
+	payload := header.MarshalBinary(nil)
 
 	for reliableFront != nil || unreliableFront != nil {
 		useReliable := false
@@ -165,4 +179,31 @@ func (h *Host) flushPeer(ctx context.Context, p *peer.Peer) ([]byte, bool, error
 	}
 
 	return payload, true, nil
+}
+
+func (h *Host) validatePacketSize(packet *goenet.Packet) error {
+	if len(packet.Data) > math.MaxUint16 {
+		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+	}
+	if len(packet.Data) > h.maxPacketDataLength(packet.Flags) {
+		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+	}
+
+	return nil
+}
+
+func (h *Host) maxPacketDataLength(flags goenet.PacketFlag) int {
+	headerSize := protocolHeaderSizeWithoutSentTime
+	commandSize := sendUnreliableCommandSize
+	if flags&goenet.PacketFlagReliable != 0 {
+		headerSize = protocolHeaderSizeWithSentTime
+		commandSize = sendReliableCommandSize
+	}
+
+	overhead := headerSize + commandSize
+	if h.config.MTU <= uint32(overhead) {
+		return 0
+	}
+
+	return int(h.config.MTU) - overhead
 }
