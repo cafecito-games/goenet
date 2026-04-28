@@ -44,6 +44,49 @@ type IncomingCommand struct {
 	Packet                   *goenet.Packet
 }
 
+// SetFragmentCount resets fragment bookkeeping for a queued inbound command.
+func (c *IncomingCommand) SetFragmentCount(fragmentCount uint32) {
+	c.FragmentCount = fragmentCount
+	c.FragmentsRemaining = fragmentCount
+	if fragmentCount == 0 {
+		c.Fragments = nil
+		return
+	}
+
+	c.Fragments = make([]uint32, fragmentWordCount(fragmentCount))
+}
+
+// MarkFragmentReceived marks one fragment index and reports whether it was newly observed.
+func (c *IncomingCommand) MarkFragmentReceived(fragmentNumber uint32) bool {
+	if fragmentNumber >= c.FragmentCount {
+		return false
+	}
+	if len(c.Fragments) == 0 {
+		c.Fragments = make([]uint32, fragmentWordCount(c.FragmentCount))
+		if c.FragmentsRemaining == 0 {
+			c.FragmentsRemaining = c.FragmentCount
+		}
+	}
+
+	word := fragmentNumber / 32
+	mask := uint32(1) << (fragmentNumber % 32)
+	if c.Fragments[word]&mask != 0 {
+		return false
+	}
+
+	c.Fragments[word] |= mask
+	if c.FragmentsRemaining > 0 {
+		c.FragmentsRemaining--
+	}
+
+	return true
+}
+
+// IsComplete reports whether all expected fragments have been observed.
+func (c *IncomingCommand) IsComplete() bool {
+	return c.FragmentsRemaining == 0
+}
+
 // Acknowledgement tracks pending protocol acknowledgements in FIFO order.
 type Acknowledgement struct {
 	SentTime uint32
@@ -170,3 +213,7 @@ type acknowledgementList = orderedList[*Acknowledgement]
 type outgoingQueue = outgoingCommandList
 type incomingQueue = incomingCommandList
 type acknowledgementQueue = acknowledgementList
+
+func fragmentWordCount(fragmentCount uint32) int {
+	return int((fragmentCount + 31) / 32)
+}
