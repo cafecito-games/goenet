@@ -1,0 +1,70 @@
+package protocol_test
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/cafecito-games/goenet/internal/protocol"
+)
+
+func TestConnectCommandMatchesGolden(t *testing.T) {
+	// connect.bin is an ENetProtocolConnect payload with:
+	// command=CONNECT|ACKNOWLEDGE, channelID=0xff, reliableSequenceNumber=3,
+	// outgoingPeerID=7, incomingSessionID=1, outgoingSessionID=2,
+	// mtu=1400, windowSize=32768, channelCount=2,
+	// incomingBandwidth=60000, outgoingBandwidth=30000,
+	// packetThrottleInterval=5000, packetThrottleAcceleration=2,
+	// packetThrottleDeceleration=3, connectID=0xdeadbeef, data=0x10203040.
+	wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", "connect.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := protocol.ParseCommand(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	connect, ok := cmd.(protocol.Connect)
+	if !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+
+	if connect.OutgoingPeerID != 7 || connect.MTU != 1400 || connect.WindowSize != 32768 || connect.ChannelCount != 2 || connect.ConnectID != 0xdeadbeef || connect.Data != 0x10203040 {
+		t.Fatalf("connect mismatch: %+v", connect)
+	}
+
+	if got := connect.MarshalBinary(nil); !bytes.Equal(got, wire) {
+		t.Fatalf("connect marshal mismatch: %x != %x", got, wire)
+	}
+}
+
+func TestAcknowledgeCommandMatchesGolden(t *testing.T) {
+	// ack.bin is an ENetProtocolAcknowledge payload with:
+	// command=ACKNOWLEDGE, channelID=0x02, reliableSequenceNumber=5,
+	// receivedReliableSequenceNumber=4, receivedSentTime=1234.
+	wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", "ack.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := protocol.ParseCommand(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ack, ok := cmd.(protocol.Acknowledge)
+	if !ok {
+		t.Fatalf("command type = %T", cmd)
+	}
+
+	if ack.ChannelID != 0x02 || ack.ReliableSequenceNumber != 5 || ack.ReceivedReliableSequenceNumber != 4 || ack.ReceivedSentTime != 1234 {
+		t.Fatalf("ack mismatch: %+v", ack)
+	}
+
+	if got := ack.MarshalBinary(nil); !bytes.Equal(got, wire) {
+		t.Fatalf("ack marshal mismatch: %x != %x", got, wire)
+	}
+}
