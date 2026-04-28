@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 )
@@ -43,25 +42,25 @@ func TestGoServerTalksToCClient(t *testing.T) {
 	)
 
 	connect := waitForEvent(t, host, 5*time.Second, func(event engine.Event) bool {
-		return event.Type == goenet.EventConnect
+		return event.Type == core.EventConnect
 	})
-	if connect.Type != goenet.EventConnect {
+	if connect.Type != core.EventConnect {
 		t.Fatalf("connect event type = %d", connect.Type)
 	}
 
 	receive := waitForEvent(t, host, 5*time.Second, func(event engine.Event) bool {
-		return event.Type == goenet.EventReceive
+		return event.Type == core.EventReceive
 	})
-	if receive.Type != goenet.EventReceive {
+	if receive.Type != core.EventReceive {
 		t.Fatalf("receive event type = %d", receive.Type)
 	}
 	if got := string(receive.Packet.Data); got != cClientMessage {
 		t.Fatalf("received payload = %q, want %q", got, cClientMessage)
 	}
 
-	if err := host.Send(receive.Peer, 0, &goenet.Packet{
+	if err := host.Send(receive.Peer, 0, &core.Packet{
 		Data:  []byte(goServerReply),
-		Flags: goenet.PacketFlagReliable,
+		Flags: core.PacketFlagReliable,
 	}); err != nil {
 		t.Fatal(err)
 	}

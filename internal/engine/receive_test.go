@@ -56,7 +56,7 @@ func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 		t.Fatalf("WriteCount = %d, want 1", got)
 	}
 
-	raw := mustPeerInState(t, host, goenet.PeerStateAcknowledgingConnect)
+	raw := mustPeerInState(t, host, core.PeerStateAcknowledgingConnect)
 	if raw.ConnectID != 0x11223344 {
 		t.Fatalf("ConnectID = %#x", raw.ConnectID)
 	}
@@ -96,8 +96,8 @@ func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventConnect {
-		t.Fatalf("second event type = %d, want %d", event.Type, goenet.EventConnect)
+	if event.Type != core.EventConnect {
+		t.Fatalf("second event type = %d, want %d", event.Type, core.EventConnect)
 	}
 	if event.Peer != raw {
 		t.Fatalf("second event peer = %p, want %p", event.Peer, raw)
@@ -105,14 +105,14 @@ func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 	if event.Data != 0x55667788 {
 		t.Fatalf("second event data = %#x", event.Data)
 	}
-	if raw.State != goenet.PeerStateConnected {
-		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateConnected)
+	if raw.State != core.PeerStateConnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateConnected)
 	}
 }
 
 func TestServiceDispatchesInboundReliableReceiveAndQueuesAck(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 2
 
@@ -136,8 +136,8 @@ func TestServiceDispatchesInboundReliableReceiveAndQueuesAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if event.Peer != raw {
 		t.Fatalf("event peer = %p, want %p", event.Peer, raw)
@@ -167,7 +167,7 @@ func TestServiceDispatchesInboundReliableReceiveAndQueuesAck(t *testing.T) {
 
 func TestServiceReassemblesReliableFragmentsBeforeDispatch(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -213,8 +213,8 @@ func TestServiceReassemblesReliableFragmentsBeforeDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("second event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("second event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if string(event.Packet.Data) != "helloworld" {
 		t.Fatalf("packet data = %q", event.Packet.Data)
@@ -226,7 +226,7 @@ func TestServiceReassemblesReliableFragmentsBeforeDispatch(t *testing.T) {
 
 func TestServiceStopsAfterFirstAckBearingCommandWithoutSentTime(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -255,8 +255,8 @@ func TestServiceStopsAfterFirstAckBearingCommandWithoutSentTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if string(event.Packet.Data) != "one" {
 		t.Fatalf("packet data = %q", event.Packet.Data)
@@ -276,7 +276,7 @@ func TestServiceStopsAfterFirstAckBearingCommandWithoutSentTime(t *testing.T) {
 
 func TestServiceRejectsWrongSessionWrongAddressAndInvalidUnassociatedPackets(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -333,7 +333,7 @@ func TestServiceRejectsWrongSessionWrongAddressAndInvalidUnassociatedPackets(t *
 
 func TestServiceAppliesVerifyConnectForConnectingPeer(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnecting)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnecting)
 	raw.IncomingPeerID = 0
 	raw.ConnectID = 0x55667788
 	raw.MTU = 1400
@@ -369,11 +369,11 @@ func TestServiceAppliesVerifyConnectForConnectingPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventConnect {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventConnect)
+	if event.Type != core.EventConnect {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventConnect)
 	}
-	if raw.State != goenet.PeerStateConnected {
-		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateConnected)
+	if raw.State != core.PeerStateConnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateConnected)
 	}
 	if raw.OutgoingPeerID != 33 {
 		t.Fatalf("OutgoingPeerID = %d", raw.OutgoingPeerID)
@@ -402,7 +402,7 @@ func TestServiceAppliesVerifyConnectForConnectingPeer(t *testing.T) {
 
 func TestServiceAcknowledgesDroppedReliableDuplicate(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -448,7 +448,7 @@ func TestServiceAcknowledgesDroppedReliableDuplicate(t *testing.T) {
 
 func TestServiceDropsStaleUnreliableCommandBeforeDispatchingFreshOne(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 	raw.Channels[0].IncomingReliableSequenceNumber = 1
@@ -463,7 +463,7 @@ func TestServiceDropsStaleUnreliableCommandBeforeDispatchingFreshOne(t *testing.
 				ReliableSequenceNumber: 0,
 			},
 		},
-		Packet: &goenet.Packet{Data: []byte("stale")},
+		Packet: &core.Packet{Data: []byte("stale")},
 	}
 	stale.SetFragmentCount(1)
 	raw.AddWaitingData(uint32(len(stale.Packet.Data)))
@@ -488,8 +488,8 @@ func TestServiceDropsStaleUnreliableCommandBeforeDispatchingFreshOne(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if got := string(event.Packet.Data); got != "fresh" {
 		t.Fatalf("event packet = %q", got)
@@ -507,7 +507,7 @@ func TestServiceDropsStaleUnreliableCommandBeforeDispatchingFreshOne(t *testing.
 
 func TestServiceDropsDuplicateAndFarAheadUnsequencedGroups(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -533,7 +533,7 @@ func TestServiceDropsDuplicateAndFarAheadUnsequencedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive || string(event.Packet.Data) != "one" {
+	if event.Type != core.EventReceive || string(event.Packet.Data) != "one" {
 		t.Fatalf("first event = %#v", event)
 	}
 
@@ -558,7 +558,7 @@ func TestServiceDropsDuplicateAndFarAheadUnsequencedGroups(t *testing.T) {
 
 func TestServiceDropsPayloadCommandsWhileDisconnectLaterButStillAcknowledgesReliableOnes(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateDisconnectLater)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateDisconnectLater)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -605,7 +605,7 @@ func TestServiceRejectsInboundPayloadLargerThanMaximumPacketSize(t *testing.T) {
 	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
 		cfg.MaximumPacketSize = 3
 	})
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -645,7 +645,7 @@ func TestServiceRejectsInboundPayloadLargerThanMaximumPacketSize(t *testing.T) {
 
 func TestServiceRejectsZeroLengthReliableFragment(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -687,7 +687,7 @@ func TestServiceRejectsZeroLengthReliableFragment(t *testing.T) {
 
 func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -712,8 +712,8 @@ func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventDisconnect {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnect)
+	if event.Type != core.EventDisconnect {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnect)
 	}
 	if event.Peer != raw {
 		t.Fatalf("event peer = %p, want %p", event.Peer, raw)
@@ -721,8 +721,8 @@ func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
 	if event.Data != 0x99aabbcc {
 		t.Fatalf("event data = %#x", event.Data)
 	}
-	if raw.State != goenet.PeerStateDisconnected {
-		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+	if raw.State != core.PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateDisconnected)
 	}
 	if raw.OutgoingPeerID != iprotocol.MaximumPeerID {
 		t.Fatalf("OutgoingPeerID = %d, want %d", raw.OutgoingPeerID, iprotocol.MaximumPeerID)
@@ -739,7 +739,7 @@ func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
 	cfg := goenet.DefaultConfig()
 	sock := testsupport.NewFakeSocket()
 	host := NewHost(coreConfigFromPublic(cfg), sock, 0)
-	peer := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	peer := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 
 	if got := len(peer.Channels); got != int(iprotocol.MaximumChannelCount) {
 		t.Fatalf("len(peer.Channels) = %d, want %d", got, iprotocol.MaximumChannelCount)
@@ -759,10 +759,10 @@ func newReceiveHost(t *testing.T, configure func(*goenet.Config)) (*Host, *tests
 	return NewHost(coreConfigFromPublic(cfg), sock, 77), sock
 }
 
-func mustAddress(t *testing.T, value string) goenet.Address {
+func mustAddress(t *testing.T, value string) core.Address {
 	t.Helper()
 
-	addr, err := goenet.NewAddress(netip.MustParseAddrPort(value), 0)
+	addr, err := core.NewAddress(netip.MustParseAddrPort(value), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +779,7 @@ func marshalDatagram(header iprotocol.Header, commands ...iprotocol.PacketComman
 	return payload
 }
 
-func mustPeerInState(t *testing.T, host *Host, state goenet.PeerState) *ipeer.Peer {
+func mustPeerInState(t *testing.T, host *Host, state core.PeerState) *ipeer.Peer {
 	t.Helper()
 
 	for _, candidate := range host.peers {
@@ -799,8 +799,12 @@ func coreConfigFromPublic(cfg goenet.Config) core.Config {
 	coreCfg.MTU = cfg.MTU
 	coreCfg.MaximumPacketSize = cfg.MaximumPacketSize
 	coreCfg.MaximumWaitingData = cfg.MaximumWaitingData
-	coreCfg.Checksum = cfg.Checksum
-	coreCfg.Compressor = cfg.Compressor
+	if cfg.Checksum != nil {
+		coreCfg.Checksum = checksumAdapter{inner: cfg.Checksum}
+	}
+	if cfg.Compressor != nil {
+		coreCfg.Compressor = compressorAdapter{inner: cfg.Compressor}
+	}
 	if cfg.Intercept != nil {
 		coreCfg.Intercept = interceptAdapter{inner: cfg.Intercept}
 	}
@@ -824,7 +828,7 @@ func (a interceptAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.I
 			Type:      core.EventType(decision.Event.Type),
 			ChannelID: decision.Event.ChannelID,
 			Data:      decision.Event.Data,
-			Packet:    decision.Event.Packet,
+			Packet:    packetFromPublic(decision.Event.Packet),
 		}
 	}
 
@@ -832,6 +836,47 @@ func (a interceptAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.I
 		Result: core.InterceptResult(decision.Result),
 		Event:  event,
 	}, nil
+}
+
+type checksumAdapter struct {
+	inner goenet.Checksummer
+}
+
+func (a checksumAdapter) Checksum(buffers []core.Buffer) uint32 {
+	publicBuffers := make([]goenet.Buffer, len(buffers))
+	for i, buffer := range buffers {
+		publicBuffers[i] = goenet.Buffer{Data: buffer.Data}
+	}
+
+	return a.inner.Checksum(publicBuffers)
+}
+
+type compressorAdapter struct {
+	inner goenet.Compressor
+}
+
+func (a compressorAdapter) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
+	publicBuffers := make([]goenet.Buffer, len(buffers))
+	for i, buffer := range buffers {
+		publicBuffers[i] = goenet.Buffer{Data: buffer.Data}
+	}
+
+	return a.inner.Compress(publicBuffers, inLimit, out)
+}
+
+func (a compressorAdapter) Decompress(in []byte, out []byte) (int, error) {
+	return a.inner.Decompress(in, out)
+}
+
+func packetFromPublic(packet *goenet.Packet) *core.Packet {
+	if packet == nil {
+		return nil
+	}
+
+	return &core.Packet{
+		Data:  packet.Data,
+		Flags: core.PacketFlag(packet.Flags),
+	}
 }
 
 func mustSingleCommand(t *testing.T, payload []byte) (iprotocol.Header, iprotocol.PacketCommand) {

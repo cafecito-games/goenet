@@ -2,6 +2,7 @@ package goenet_test
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/cafecito-games/goenet"
@@ -67,5 +68,40 @@ func TestPublicPackageStillExposesConfigAndPacketTypes(t *testing.T) {
 	}
 	if cfg.MTU == 0 {
 		t.Fatal("default config should set MTU")
+	}
+}
+
+func TestExportedTypesRemainOwnedByPublicPackage(t *testing.T) {
+	t.Parallel()
+
+	var (
+		address         goenet.Address
+		packet          goenet.Packet
+		buffer          goenet.Buffer
+		eventType       goenet.EventType
+		packetFlag      goenet.PacketFlag
+		peerState       goenet.PeerState
+		interceptResult goenet.InterceptResult
+	)
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "Address", typ: reflect.TypeOf(address)},
+		{name: "Packet", typ: reflect.TypeOf(packet)},
+		{name: "Buffer", typ: reflect.TypeOf(buffer)},
+		{name: "EventType", typ: reflect.TypeOf(eventType)},
+		{name: "PacketFlag", typ: reflect.TypeOf(packetFlag)},
+		{name: "PeerState", typ: reflect.TypeOf(peerState)},
+		{name: "InterceptResult", typ: reflect.TypeOf(interceptResult)},
+		{name: "Checksummer", typ: reflect.TypeOf((*goenet.Checksummer)(nil)).Elem()},
+		{name: "Compressor", typ: reflect.TypeOf((*goenet.Compressor)(nil)).Elem()},
+	}
+
+	for _, tc := range tests {
+		if got, want := tc.typ.PkgPath(), "github.com/cafecito-games/goenet"; got != want {
+			t.Fatalf("%s package path = %q, want %q", tc.name, got, want)
+		}
 	}
 }

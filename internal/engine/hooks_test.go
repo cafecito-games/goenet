@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 )
 
@@ -27,7 +28,7 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 		})
 	})
 
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
@@ -71,8 +72,8 @@ func TestServiceInterceptCanSynthesizeEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventDisconnect {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnect)
+	if event.Type != core.EventDisconnect {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnect)
 	}
 	if event.Data != 0xdecafbad {
 		t.Fatalf("event data = %#x", event.Data)
@@ -88,7 +89,7 @@ func TestServiceChecksumRejectsInvalidAndAcceptsValidInboundPackets(t *testing.T
 	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
 		cfg.Checksum = checksummer
 	})
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 	raw.ConnectID = 0x10203040
@@ -118,8 +119,8 @@ func TestServiceChecksumRejectsInvalidAndAcceptsValidInboundPackets(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if got := string(event.Packet.Data); got != "ok" {
 		t.Fatalf("packet = %q", got)
@@ -135,13 +136,13 @@ func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
 		cfg.Compressor = compressor
 	})
-	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	raw.IncomingPeerID = 0
 	raw.IncomingSessionID = 1
 
-	if err := host.Send(raw, 0, &goenet.Packet{
+	if err := host.Send(raw, 0, &core.Packet{
 		Data:  []byte("compress-me"),
-		Flags: goenet.PacketFlagReliable,
+		Flags: core.PacketFlagReliable,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -182,8 +183,8 @@ func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if got := string(event.Packet.Data); got != "round-trip" {
 		t.Fatalf("packet = %q", got)

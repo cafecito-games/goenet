@@ -3,14 +3,14 @@ package goenet
 import "github.com/cafecito-games/goenet/internal/core"
 
 // EventType identifies the kind of network event that occurred.
-type EventType = core.EventType
+type EventType uint8
 
 const (
-	EventNone              = core.EventNone
-	EventConnect           = core.EventConnect
-	EventDisconnect        = core.EventDisconnect
-	EventReceive           = core.EventReceive
-	EventDisconnectTimeout = core.EventDisconnectTimeout
+	EventNone EventType = iota
+	EventConnect
+	EventDisconnect
+	EventReceive
+	EventDisconnectTimeout
 )
 
 // Event is the public event shape returned by host service loops and intercept hooks.
@@ -20,4 +20,30 @@ type Event struct {
 	ChannelID uint8
 	Data      uint32
 	Packet    *Packet
+}
+
+func toCoreEvent(event *Event) *core.Event {
+	if event == nil {
+		return nil
+	}
+
+	return &core.Event{
+		Type:      core.EventType(event.Type),
+		ChannelID: event.ChannelID,
+		Data:      event.Data,
+		Packet:    toCorePacket(event.Packet),
+	}
+}
+
+func fromCoreEvent(event *core.Event) *Event {
+	if event == nil {
+		return nil
+	}
+
+	return &Event{
+		Type:      EventType(event.Type),
+		ChannelID: event.ChannelID,
+		Data:      event.Data,
+		Packet:    fromCorePacket(event.Packet),
+	}
 }

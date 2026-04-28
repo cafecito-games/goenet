@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	ipeer "github.com/cafecito-games/goenet/internal/peer"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 )
@@ -142,7 +142,7 @@ func TestServiceRetransmitsExpiredReliableButFlushDoesNot(t *testing.T) {
 	host, sock := newTestHost(t)
 	raw := mustConnectedPeer(t, host)
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -215,18 +215,18 @@ func TestServiceDisconnectsOnTimeoutMinimumAndLimitBranch(t *testing.T) {
 				ReliableSequenceNumber: 1,
 			},
 		},
-		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+		Packet: &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable},
 	})
 
 	event, err := host.Service(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventDisconnectTimeout {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnectTimeout)
+	if event.Type != core.EventDisconnectTimeout {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnectTimeout)
 	}
-	if raw.State != goenet.PeerStateDisconnected {
-		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+	if raw.State != core.PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateDisconnected)
 	}
 }
 
@@ -253,33 +253,33 @@ func TestServiceDisconnectsOnTimeoutMaximumBranch(t *testing.T) {
 				ReliableSequenceNumber: 1,
 			},
 		},
-		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+		Packet: &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable},
 	})
 
 	event, err := host.Service(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventDisconnectTimeout {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnectTimeout)
+	if event.Type != core.EventDisconnectTimeout {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnectTimeout)
 	}
-	if raw.State != goenet.PeerStateDisconnected {
-		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+	if raw.State != core.PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateDisconnected)
 	}
 }
 
 func TestServiceTimeoutDuringHandshakeResetsSilently(t *testing.T) {
 	tests := []struct {
 		name  string
-		state goenet.PeerState
+		state core.PeerState
 	}{
 		{
 			name:  "acknowledging connect",
-			state: goenet.PeerStateAcknowledgingConnect,
+			state: core.PeerStateAcknowledgingConnect,
 		},
 		{
 			name:  "connection pending",
-			state: goenet.PeerStateConnectionPending,
+			state: core.PeerStateConnectionPending,
 		},
 	}
 
@@ -307,18 +307,18 @@ func TestServiceTimeoutDuringHandshakeResetsSilently(t *testing.T) {
 						ReliableSequenceNumber: 1,
 					},
 				},
-				Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+				Packet: &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable},
 			})
 
 			event, err := host.Service(context.Background(), 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if event.Type != goenet.EventNone {
-				t.Fatalf("event type = %d, want %d", event.Type, goenet.EventNone)
+			if event.Type != core.EventNone {
+				t.Fatalf("event type = %d, want %d", event.Type, core.EventNone)
 			}
-			if raw.State != goenet.PeerStateDisconnected {
-				t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+			if raw.State != core.PeerStateDisconnected {
+				t.Fatalf("peer state = %d, want %d", raw.State, core.PeerStateDisconnected)
 			}
 		})
 	}
@@ -327,7 +327,7 @@ func TestServiceTimeoutDuringHandshakeResetsSilently(t *testing.T) {
 func TestServiceSilentHandshakeTimeoutContinuesServicingOtherPeers(t *testing.T) {
 	host, sock := newReceiveHost(t, nil)
 
-	timedOut := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateAcknowledgingConnect)
+	timedOut := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateAcknowledgingConnect)
 	timedOut.IncomingPeerID = 0
 	timedOut.IncomingSessionID = 1
 	timedOut.RoundTripTime = 100
@@ -348,10 +348,10 @@ func TestServiceSilentHandshakeTimeoutContinuesServicingOtherPeers(t *testing.T)
 				ReliableSequenceNumber: 1,
 			},
 		},
-		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+		Packet: &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable},
 	})
 
-	ready := host.AddPeer(mustAddress(t, "127.0.0.1:9002"), goenet.PeerStateConnected)
+	ready := host.AddPeer(mustAddress(t, "127.0.0.1:9002"), core.PeerStateConnected)
 	ready.IncomingPeerID = 1
 	ready.IncomingSessionID = 1
 
@@ -376,21 +376,21 @@ func TestServiceSilentHandshakeTimeoutContinuesServicingOtherPeers(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventReceive {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
 	}
 	if got := string(event.Packet.Data); got != "next" {
 		t.Fatalf("packet = %q, want %q", got, "next")
 	}
-	if timedOut.State != goenet.PeerStateDisconnected {
-		t.Fatalf("timedOut state = %d, want %d", timedOut.State, goenet.PeerStateDisconnected)
+	if timedOut.State != core.PeerStateDisconnected {
+		t.Fatalf("timedOut state = %d, want %d", timedOut.State, core.PeerStateDisconnected)
 	}
 }
 
 func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testing.T) {
 	host, _ := newTestHost(t)
 	timedOut := mustConnectedPeer(t, host)
-	survivor := host.AddPeer(timedOut.Address, goenet.PeerStateConnected)
+	survivor := host.AddPeer(timedOut.Address, core.PeerStateConnected)
 
 	host.serviceTime = 32000
 	host.incomingBandwidth = 800
@@ -413,15 +413,15 @@ func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testi
 				ReliableSequenceNumber: 1,
 			},
 		},
-		Packet: &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable},
+		Packet: &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable},
 	})
 
 	event, err := host.Service(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != goenet.EventDisconnectTimeout {
-		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnectTimeout)
+	if event.Type != core.EventDisconnectTimeout {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnectTimeout)
 	}
 	if !host.recalculateBandwidthLimits {
 		t.Fatal("recalculate bandwidth limits = false, want true")
@@ -444,7 +444,7 @@ func TestOutgoingDataTotalTracksQueuedCommandsNotSerializedDatagrams(t *testing.
 	host, _ := newTestHost(t)
 	raw := mustConnectedPeer(t, host)
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}

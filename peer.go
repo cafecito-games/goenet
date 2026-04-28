@@ -3,19 +3,19 @@ package goenet
 import "github.com/cafecito-games/goenet/internal/core"
 
 // PeerState mirrors ENetPeerState ordinal values.
-type PeerState = core.PeerState
+type PeerState uint8
 
 const (
-	PeerStateDisconnected            = core.PeerStateDisconnected
-	PeerStateConnecting              = core.PeerStateConnecting
-	PeerStateAcknowledgingConnect    = core.PeerStateAcknowledgingConnect
-	PeerStateConnectionPending       = core.PeerStateConnectionPending
-	PeerStateConnectionSucceeded     = core.PeerStateConnectionSucceeded
-	PeerStateConnected               = core.PeerStateConnected
-	PeerStateDisconnectLater         = core.PeerStateDisconnectLater
-	PeerStateDisconnecting           = core.PeerStateDisconnecting
-	PeerStateAcknowledgingDisconnect = core.PeerStateAcknowledgingDisconnect
-	PeerStateZombie                  = core.PeerStateZombie
+	PeerStateDisconnected PeerState = iota
+	PeerStateConnecting
+	PeerStateAcknowledgingConnect
+	PeerStateConnectionPending
+	PeerStateConnectionSucceeded
+	PeerStateConnected
+	PeerStateDisconnectLater
+	PeerStateDisconnecting
+	PeerStateAcknowledgingDisconnect
+	PeerStateZombie
 )
 
 // Peer is the public handle for a remote endpoint.
@@ -26,4 +26,12 @@ type Peer struct {
 // State returns the current peer state snapshot.
 func (p *Peer) State() PeerState {
 	return p.state
+}
+
+func toCorePeerState(state PeerState) core.PeerState {
+	return core.PeerState(state)
+}
+
+func fromCorePeerState(state core.PeerState) PeerState {
+	return PeerState(state)
 }

@@ -20,7 +20,7 @@ func TestReliableSendQueuesAcknowledgeableCommand(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestUnreliableSendDoesNotAdvanceReliableCounters(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc")}
+	packet := &core.Packet{Data: []byte("abc")}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestFlushWritesOnlyWhenCommandsAreQueued(t *testing.T) {
 	}
 
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestFlushWithoutReliableCommandsOmitsSentTimeMetadata(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc")}
+	packet := &core.Packet{Data: []byte("abc")}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestFlushMovesReliableCommandsInFlightWithWireMetadata(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{
+	packet := &core.Packet{
 		Data: bytesOfLen(int(peer.Raw.MTU-9), 'x'),
 	}
 	err := host.Send(peer.Raw, 0, packet)
@@ -308,7 +308,7 @@ func TestSendUsesPeerMTUForValidation(t *testing.T) {
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 	peer.Raw.MTU = 20
 
-	err := host.Send(peer.Raw, 0, &goenet.Packet{
+	err := host.Send(peer.Raw, 0, &core.Packet{
 		Data: bytesOfLen(11, 'x'),
 	})
 	if err == nil {
@@ -323,8 +323,8 @@ func TestFlushStopsBeforeExceedingMTUBudget(t *testing.T) {
 	host, sock := newSizedTestHost(t, 20)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	first := &goenet.Packet{Data: []byte("1234567890")}
-	second := &goenet.Packet{Data: []byte("abcdefghij")}
+	first := &core.Packet{Data: []byte("1234567890")}
+	second := &core.Packet{Data: []byte("abcdefghij")}
 	if err := host.Send(peer.Raw, 0, first); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestFlushStopsAtMaximumCommandCount(t *testing.T) {
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
 	for i := 0; i < int(iprotocol.MaximumPacketCommands)+1; i++ {
-		if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte{'a' + byte(i%26)}}); err != nil {
+		if err := host.Send(peer.Raw, 0, &core.Packet{Data: []byte{'a' + byte(i%26)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -391,13 +391,13 @@ func TestFlushMergesQueuesByQueueTime(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("r1"), Flags: goenet.PacketFlagReliable}); err != nil {
+	if err := host.Send(peer.Raw, 0, &core.Packet{Data: []byte("r1"), Flags: core.PacketFlagReliable}); err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("u2")}); err != nil {
+	if err := host.Send(peer.Raw, 0, &core.Packet{Data: []byte("u2")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("r3"), Flags: goenet.PacketFlagReliable}); err != nil {
+	if err := host.Send(peer.Raw, 0, &core.Packet{Data: []byte("r3"), Flags: core.PacketFlagReliable}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -424,7 +424,7 @@ func TestFlushDoesNotMutateQueuesWhenContextCanceled(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestFlushDoesNotMutateQueuesWhenWriteFails(t *testing.T) {
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	packet := &goenet.Packet{Data: []byte("abc"), Flags: goenet.PacketFlagReliable}
+	packet := &core.Packet{Data: []byte("abc"), Flags: core.PacketFlagReliable}
 	if err := host.Send(peer.Raw, 0, packet); err != nil {
 		t.Fatal(err)
 	}
@@ -615,9 +615,9 @@ func TestSendRejectsUnsequencedPacketsForThisMilestone(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	err := host.Send(peer.Raw, 0, &goenet.Packet{
+	err := host.Send(peer.Raw, 0, &core.Packet{
 		Data:  []byte("abc"),
-		Flags: goenet.PacketFlagUnsequenced,
+		Flags: core.PacketFlagUnsequenced,
 	})
 	if err == nil {
 		t.Fatal("expected unsequenced error")
@@ -639,7 +639,7 @@ func TestSendRejectsUnsequencedPacketsForThisMilestone(t *testing.T) {
 func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
-	addr, err := goenet.NewAddress(netip.MustParseAddrPort("127.0.0.1:9001"), 0)
+	addr, err := core.NewAddress(netip.MustParseAddrPort("127.0.0.1:9001"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,7 +649,7 @@ func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 
 	sock := testsupport.NewFakeSocket()
 	host := NewHost(coreConfigForTest(cfg), sock, 77)
-	host.AddPeer(addr, goenet.PeerStateConnected)
+	host.AddPeer(addr, core.PeerStateConnected)
 	return host, sock
 }
 
@@ -657,7 +657,7 @@ func mustConnectedPeer(t *testing.T, host *Host) *ipeer.Peer {
 	t.Helper()
 
 	for _, p := range host.peers {
-		if p.State == goenet.PeerStateConnected {
+		if p.State == core.PeerStateConnected {
 			return p
 		}
 	}
@@ -669,7 +669,7 @@ func mustConnectedPeer(t *testing.T, host *Host) *ipeer.Peer {
 func newSizedTestHost(t *testing.T, mtu uint32) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
-	addr, err := goenet.NewAddress(netip.MustParseAddrPort("127.0.0.1:9001"), 0)
+	addr, err := core.NewAddress(netip.MustParseAddrPort("127.0.0.1:9001"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,7 +680,7 @@ func newSizedTestHost(t *testing.T, mtu uint32) (*Host, *testsupport.FakeSocket)
 
 	sock := testsupport.NewFakeSocket()
 	host := NewHost(coreConfigForTest(cfg), sock, 77)
-	host.AddPeer(addr, goenet.PeerStateConnected)
+	host.AddPeer(addr, core.PeerStateConnected)
 	return host, sock
 }
 
@@ -757,15 +757,7 @@ func parseWireCommands(t *testing.T, payload []byte) []wireCommand {
 }
 
 func coreConfigForTest(cfg goenet.Config) core.Config {
-	return core.Config{
-		PeerCount:          cfg.PeerCount,
-		ChannelLimit:       cfg.ChannelLimit,
-		MTU:                cfg.MTU,
-		MaximumPacketSize:  cfg.MaximumPacketSize,
-		MaximumWaitingData: cfg.MaximumWaitingData,
-		Checksum:           cfg.Checksum,
-		Compressor:         cfg.Compressor,
-	}
+	return coreConfigFromPublic(cfg)
 }
 
 type protocolCommand struct {

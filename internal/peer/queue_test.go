@@ -3,7 +3,7 @@ package peer
 import (
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
@@ -12,11 +12,11 @@ func TestOutgoingQueuePreservesFIFOOrder(t *testing.T) {
 
 	first := &OutgoingCommand{
 		ReliableSequenceNumber: 1,
-		Packet:                 &goenet.Packet{Data: []byte("first")},
+		Packet:                 &core.Packet{Data: []byte("first")},
 	}
 	second := &OutgoingCommand{
 		ReliableSequenceNumber: 2,
-		Packet:                 &goenet.Packet{Data: []byte("second")},
+		Packet:                 &core.Packet{Data: []byte("second")},
 	}
 
 	firstElem := q.PushBack(first)

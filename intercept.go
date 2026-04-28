@@ -7,11 +7,11 @@ import (
 )
 
 // InterceptResult controls whether a raw UDP packet continues through protocol handling.
-type InterceptResult = core.InterceptResult
+type InterceptResult uint8
 
 const (
-	InterceptResultContinue = core.InterceptResultContinue
-	InterceptResultConsume  = core.InterceptResultConsume
+	InterceptResultContinue InterceptResult = iota
+	InterceptResultConsume
 )
 
 // InterceptDecision reports whether an interceptor consumed the packet and whether it synthesized an event.
@@ -39,17 +39,4 @@ func (a interceptorAdapter) Intercept(addr netip.AddrPort, payload []byte) (core
 		Result: core.InterceptResult(decision.Result),
 		Event:  toCoreEvent(decision.Event),
 	}, nil
-}
-
-func toCoreEvent(event *Event) *core.Event {
-	if event == nil {
-		return nil
-	}
-
-	return &core.Event{
-		Type:      core.EventType(event.Type),
-		ChannelID: event.ChannelID,
-		Data:      event.Data,
-		Packet:    event.Packet,
-	}
 }
