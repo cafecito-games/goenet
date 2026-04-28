@@ -123,6 +123,14 @@ func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) e
 
 func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
+		if blocked := findUnsendableQueuedCommand(p); blocked != nil {
+			return fmt.Errorf(
+				"engine: queued command %d cannot fit within peer MTU %d",
+				blocked.Command.Header.Command,
+				p.MTU,
+			)
+		}
+
 		for {
 			datagram, wroteAny, err := h.preparePeerDatagram(p)
 			if err != nil {
@@ -147,8 +155,30 @@ func (h *Host) Flush(ctx context.Context) error {
 	return nil
 }
 
+func findUnsendableQueuedCommand(p *peer.Peer) *peer.OutgoingCommand {
+	for elem := p.OutgoingSendReliableCommands.Front(); elem != nil; elem = elem.Next() {
+		if !commandFitsPeerMTU(p, elem.Value()) {
+			return elem.Value()
+		}
+	}
+	for elem := p.OutgoingCommands.Front(); elem != nil; elem = elem.Next() {
+		if !commandFitsPeerMTU(p, elem.Value()) {
+			return elem.Value()
+		}
+	}
+
+	return nil
+}
+
 func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error) {
-	selected := h.selectOutgoingBatch(p)
+	selected, blocked := h.selectOutgoingBatch(p)
+	if blocked != nil {
+		return preparedDatagram{}, false, fmt.Errorf(
+			"engine: queued command %d cannot fit within peer MTU %d",
+			blocked.command.Command.Header.Command,
+			p.MTU,
+		)
+	}
 	if len(selected) == 0 {
 		return preparedDatagram{}, false, nil
 	}
@@ -209,7 +239,7 @@ func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {
 	}
 }
 
-func (h *Host) selectOutgoingBatch(p *peer.Peer) []outgoingSelection {
+func (h *Host) selectOutgoingBatch(p *peer.Peer) ([]outgoingSelection, *outgoingSelection) {
 	reliableFront := p.OutgoingSendReliableCommands.Front()
 	outgoingFront := p.OutgoingCommands.Front()
 
@@ -240,8 +270,14 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) []outgoingSelection {
 			headerSize = protocolHeaderSizeWithSentTime
 		}
 
-		if len(selected) >= int(protocol.MaximumPacketCommands) ||
-			headerSize+bodySize+next.wireSize > int(p.MTU) {
+		if headerSize+bodySize+next.wireSize > int(p.MTU) {
+			if len(selected) == 0 {
+				blocked := next
+				return nil, &blocked
+			}
+			break
+		}
+		if len(selected) >= int(protocol.MaximumPacketCommands) {
 			break
 		}
 
@@ -250,7 +286,7 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) []outgoingSelection {
 		hasAck = nextHasAck
 	}
 
-	return selected
+	return selected, nil
 }
 
 func buildSelection(cmd *peer.OutgoingCommand, fromReliableQueue bool) outgoingSelection {
@@ -278,6 +314,15 @@ func commandRequiresAck(cmd *peer.OutgoingCommand) bool {
 
 func commandWireSize(cmd *peer.OutgoingCommand) int {
 	return len(cmd.Command.Payload.MarshalBinary(nil))
+}
+
+func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand) bool {
+	headerSize := protocolHeaderSizeWithoutSentTime
+	if commandRequiresAck(cmd) {
+		headerSize = protocolHeaderSizeWithSentTime
+	}
+
+	return headerSize+commandWireSize(cmd) <= int(p.MTU)
 }
 
 func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {

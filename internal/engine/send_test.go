@@ -493,6 +493,123 @@ func TestFlushDoesNotMutateQueuesWhenWriteFails(t *testing.T) {
 	}
 }
 
+func TestFlushErrorsWhenQueuedCommandCannotFitWithinPeerMTU(t *testing.T) {
+	host, sock := newSizedTestHost(t, 7)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	err := host.queueOutgoingControlCommand(peer.Raw, ipeer.Command{
+		Header: ipeer.Header{
+			Command:   iprotocol.CommandPing,
+			ChannelID: 0xff,
+			Flags:     iprotocol.CommandFlagAcknowledge,
+		},
+		Payload: &protocolCommand{
+			command:   iprotocol.CommandPing,
+			flags:     iprotocol.CommandFlagAcknowledge,
+			channelID: 0xff,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = host.Flush(context.Background())
+	if err == nil {
+		t.Fatal("expected unsendable command error")
+	}
+	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 1 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.InFlightReliableCount(); got != 0 {
+		t.Fatalf("InFlightReliableCount = %d", got)
+	}
+
+	cmd := peer.mustOutgoing(t)
+	if cmd.SendAttempts != 0 {
+		t.Fatalf("send attempts = %d", cmd.SendAttempts)
+	}
+	if cmd.SentTime != 0 {
+		t.Fatalf("sent time = %d", cmd.SentTime)
+	}
+	if cmd.RoundTripTimeout != 0 {
+		t.Fatalf("round trip timeout = %d", cmd.RoundTripTimeout)
+	}
+}
+
+func TestFlushPreservesQueueStateWhenLaterQueuedCommandCannotFitWithinPeerMTU(t *testing.T) {
+	host, sock := newSizedTestHost(t, 10)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	if err := host.queueOutgoingControlCommand(peer.Raw, ipeer.Command{
+		Header: ipeer.Header{
+			Command:   iprotocol.CommandPing,
+			ChannelID: 0xff,
+			Flags:     iprotocol.CommandFlagAcknowledge,
+		},
+		Payload: &protocolCommand{
+			command:   iprotocol.CommandPing,
+			flags:     iprotocol.CommandFlagAcknowledge,
+			channelID: 0xff,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := host.queueOutgoingControlCommand(peer.Raw, ipeer.Command{
+		Header: ipeer.Header{
+			Command:   iprotocol.CommandPing,
+			ChannelID: 0xff,
+			Flags:     iprotocol.CommandFlagAcknowledge,
+		},
+		Payload: &sizedProtocolCommand{
+			protocolCommand: protocolCommand{
+				command:   iprotocol.CommandPing,
+				flags:     iprotocol.CommandFlagAcknowledge,
+				channelID: 0xff,
+			},
+			extra: []byte("xyz"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = host.Flush(context.Background())
+	if err == nil {
+		t.Fatal("expected unsendable command error")
+	}
+	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+	if got := peer.SentReliableCount(); got != 0 {
+		t.Fatalf("SentReliableCount = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 2 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.InFlightReliableCount(); got != 0 {
+		t.Fatalf("InFlightReliableCount = %d", got)
+	}
+
+	for elem := peer.Raw.OutgoingCommands.Front(); elem != nil; elem = elem.Next() {
+		control := elem.Value()
+		if control.SendAttempts != 0 {
+			t.Fatalf("control send attempts = %d", control.SendAttempts)
+		}
+		if control.SentTime != 0 {
+			t.Fatalf("control sent time = %d", control.SentTime)
+		}
+	}
+}
+
 func TestSendRejectsUnsequencedPacketsForThisMilestone(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
@@ -656,6 +773,20 @@ func (c *protocolCommand) MarshalBinary(dst []byte) []byte {
 	dst[start+1] = c.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], c.reliableSequenceNumber)
 	return dst
+}
+
+type sizedProtocolCommand struct {
+	protocolCommand
+	extra []byte
+}
+
+func (c *sizedProtocolCommand) setOutgoingSequenceNumbers(reliable, unreliable uint16) {
+	c.protocolCommand.setOutgoingSequenceNumbers(reliable, unreliable)
+}
+
+func (c *sizedProtocolCommand) MarshalBinary(dst []byte) []byte {
+	dst = c.protocolCommand.MarshalBinary(dst)
+	return append(dst, c.extra...)
 }
 
 type assertErr string
