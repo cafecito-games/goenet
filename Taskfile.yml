@@ -20,7 +20,7 @@ tasks:
       - go test -race -count=1 {{.PKG}}
 
   test:cover:
-    desc: Run tests with coverage; output coverage.out.
+    desc: Run tests with coverage; writes to COVERAGE_FILE or a temp profile.
     cmds:
       - |
         coverage_file="${COVERAGE_FILE:-$(mktemp -t goenet-coverage.XXXXXX.out)}"
@@ -43,15 +43,18 @@ tasks:
     desc: Verify all Go files are formatted (CI use).
     cmds:
       - |
-        unformatted=$(gofmt -l .)
-        unformatted=$(printf '%s\n' "$unformatted" | grep -v '^vendor/' || :)
+        tmp_gofmt=$(mktemp -t goenet-gofmt.XXXXXX.txt)
+        tmp_goimports=$(mktemp -t goenet-goimports.XXXXXX.txt)
+        trap 'rm -f "$tmp_gofmt" "$tmp_goimports"' EXIT
+        gofmt -l . >"$tmp_gofmt"
+        unformatted=$(grep -v '^vendor/' "$tmp_gofmt" || :)
         if [ -n "$unformatted" ]; then
           echo "Unformatted files:"
           echo "$unformatted"
           exit 1
         fi
-        unimported=$(go run golang.org/x/tools/cmd/goimports@v0.44.0 -l .)
-        unimported=$(printf '%s\n' "$unimported" | grep -v '^vendor/' || :)
+        go run golang.org/x/tools/cmd/goimports@v0.44.0 -l . >"$tmp_goimports"
+        unimported=$(grep -v '^vendor/' "$tmp_goimports" || :)
         if [ -n "$unimported" ]; then
           echo "Files needing goimports:"
           echo "$unimported"
