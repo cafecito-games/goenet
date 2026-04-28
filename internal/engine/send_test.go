@@ -219,6 +219,89 @@ func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	}
 }
 
+func TestFlushStopsBeforeExceedingMTUBudget(t *testing.T) {
+	host, sock := newSizedTestHost(t, 20)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	first := &goenet.Packet{Data: []byte("1234567890")}
+	second := &goenet.Packet{Data: []byte("abcdefghij")}
+	if err := host.Send(peer.Raw, 0, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Send(peer.Raw, 0, second); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("WriteCount after first flush = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 1 {
+		t.Fatalf("OutgoingCount after first flush = %d", got)
+	}
+
+	firstWrite := sock.MustWrite(t, 0)
+	if len(firstWrite.Payload) != 20 {
+		t.Fatalf("first datagram length = %d", len(firstWrite.Payload))
+	}
+	if got := countWireCommands(t, firstWrite.Payload); got != 1 {
+		t.Fatalf("first datagram command count = %d", got)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sock.WriteCount(); got != 2 {
+		t.Fatalf("WriteCount after second flush = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount after second flush = %d", got)
+	}
+}
+
+func TestFlushStopsAtMaximumCommandCount(t *testing.T) {
+	host, sock := newTestHost(t)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	for i := 0; i < int(iprotocol.MaximumPacketCommands)+1; i++ {
+		if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte{'a' + byte(i%26)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("WriteCount after first flush = %d", got)
+	}
+	if got := countWireCommands(t, sock.MustWrite(t, 0).Payload); got != int(iprotocol.MaximumPacketCommands) {
+		t.Fatalf("first datagram command count = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 1 {
+		t.Fatalf("OutgoingCount after first flush = %d", got)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sock.WriteCount(); got != 2 {
+		t.Fatalf("WriteCount after second flush = %d", got)
+	}
+	if got := countWireCommands(t, sock.MustWrite(t, 1).Payload); got != 1 {
+		t.Fatalf("second datagram command count = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount after second flush = %d", got)
+	}
+}
+
 func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
@@ -234,6 +317,66 @@ func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	host := NewHost(cfg, sock, 77)
 	host.AddPeer(addr, goenet.PeerStateConnected)
 	return host, sock
+}
+
+func newSizedTestHost(t *testing.T, mtu uint32) (*Host, *testsupport.FakeSocket) {
+	t.Helper()
+
+	addr, err := goenet.NewAddress(netip.MustParseAddrPort("127.0.0.1:9001"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := goenet.DefaultConfig()
+	cfg.ChannelLimit = 1
+	cfg.MTU = mtu
+
+	sock := testsupport.NewFakeSocket()
+	host := NewHost(cfg, sock, 77)
+	host.AddPeer(addr, goenet.PeerStateConnected)
+	return host, sock
+}
+
+func countWireCommands(t *testing.T, payload []byte) int {
+	t.Helper()
+
+	header, err := iprotocol.ParseHeader(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	offset := 2
+	if header.Flags&iprotocol.HeaderFlagSentTime != 0 {
+		offset = 4
+	}
+
+	count := 0
+	for offset < len(payload) {
+		cmd := iprotocol.Command(payload[offset] & byte(iprotocol.CommandMask))
+		switch cmd {
+		case iprotocol.CommandSendReliable:
+			if offset+6 > len(payload) {
+				t.Fatalf("truncated reliable command at offset %d", offset)
+			}
+			dataLen := int(binary.BigEndian.Uint16(payload[offset+4 : offset+6]))
+			offset += 6 + dataLen
+		case iprotocol.CommandSendUnreliable:
+			if offset+8 > len(payload) {
+				t.Fatalf("truncated unreliable command at offset %d", offset)
+			}
+			dataLen := int(binary.BigEndian.Uint16(payload[offset+6 : offset+8]))
+			offset += 8 + dataLen
+		default:
+			t.Fatalf("unexpected command %d at offset %d", cmd, offset)
+		}
+		count++
+	}
+
+	if offset != len(payload) {
+		t.Fatalf("wire payload ended at %d of %d", offset, len(payload))
+	}
+
+	return count
 }
 
 func bytesOfLen(n int, b byte) []byte {
