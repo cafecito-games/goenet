@@ -1,0 +1,75 @@
+version: '3'
+
+vars:
+  PKG: ./...
+
+tasks:
+  default:
+    desc: Run the full CI pipeline locally.
+    cmds:
+      - task: ci
+
+  build:
+    desc: Build all packages.
+    cmds:
+      - go build ./...
+
+  test:
+    desc: Run unit tests.
+    cmds:
+      - go test -race -count=1 {{.PKG}}
+
+  test:cover:
+    desc: Run tests with coverage; output coverage.out.
+    cmds:
+      - go test -race -count=1 -coverprofile=coverage.out -covermode=atomic {{.PKG}}
+      - go tool cover -func=coverage.out | tail -1
+
+  lint:
+    desc: Run golangci-lint.
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format Go source.
+    cmds:
+      - go fmt {{.PKG}}
+      - go run golang.org/x/tools/cmd/goimports@latest -w .
+
+  fmt:check:
+    desc: Verify all Go files are formatted (CI use).
+    cmds:
+      - |
+        unformatted=$(gofmt -l . | grep -v '^vendor/' || true)
+        if [ -n "$unformatted" ]; then
+          echo "Unformatted files:"
+          echo "$unformatted"
+          exit 1
+        fi
+    silent: true
+
+  tidy:
+    desc: Run go mod tidy.
+    cmds:
+      - go mod tidy
+
+  tidy:check:
+    desc: Verify go.mod/go.sum are tidy (CI use).
+    cmds:
+      - go mod tidy
+      - |
+        if ! git diff --quiet -- go.mod go.sum; then
+          echo "go.mod/go.sum are not tidy. Run 'task tidy' and commit the result."
+          git --no-pager diff -- go.mod go.sum
+          exit 1
+        fi
+    silent: true
+
+  ci:
+    desc: Full CI pipeline (fmt:check + tidy:check + lint + test + build).
+    cmds:
+      - task: fmt:check
+      - task: tidy:check
+      - task: lint
+      - task: test
+      - task: build
