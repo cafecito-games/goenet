@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net/netip"
@@ -88,47 +89,98 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 			}
 			return err
 		}
-		h.handleIncomingDatagram(buf[:n], addr)
+		if err := h.handleIncomingDatagram(buf[:n], addr); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) {
-	header, err := protocol.ParseHeader(payload)
-	if err != nil {
-		return
+func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error {
+	if h.config.Intercept != nil {
+		address, err := goenet.NewAddress(addr, 0)
+		if err != nil {
+			return err
+		}
+		result, err := h.config.Intercept.Intercept(address, payload)
+		if err != nil {
+			return err
+		}
+		if result == goenet.InterceptResultConsume {
+			return nil
+		}
 	}
 
-	offset := protocolHeaderSizeWithoutSentTime
+	header, err := protocol.ParseHeader(payload)
+	if err != nil {
+		return nil
+	}
+
+	protocolHeaderSize := protocolHeaderSizeWithoutSentTime
 	if header.Flags&protocol.HeaderFlagSentTime != 0 {
-		offset = protocolHeaderSizeWithSentTime
+		protocolHeaderSize = protocolHeaderSizeWithSentTime
+	}
+	offset := protocolHeaderSize
+	if h.config.Checksum != nil {
+		offset += 4
 	}
 	if offset > len(payload) {
-		return
+		return nil
 	}
 
 	currentPeer, ok := h.lookupPeer(header, addr)
 	if !ok {
-		return
+		return nil
 	}
 
-	for offset < len(payload) {
-		command, _, used, err := protocol.ParseCommand(payload[offset:])
+	workingPayload := payload
+	if header.Flags&protocol.HeaderFlagCompressed != 0 {
+		if h.config.Compressor == nil {
+			return nil
+		}
+		outLimit := int(h.config.MTU) - offset
+		if outLimit <= 0 {
+			return nil
+		}
+		decompressed := make([]byte, outLimit)
+		n, err := h.config.Compressor.Decompress(payload[offset:], decompressed)
+		if err != nil || n <= 0 || n > len(decompressed) {
+			return nil
+		}
+
+		workingPayload = make([]byte, 0, offset+n)
+		workingPayload = append(workingPayload, payload[:offset]...)
+		workingPayload = append(workingPayload, decompressed[:n]...)
+	} else if h.config.Checksum != nil {
+		workingPayload = append([]byte(nil), payload...)
+	}
+
+	if h.config.Checksum != nil {
+		checksumOffset := protocolHeaderSize
+		desired := binary.LittleEndian.Uint32(workingPayload[checksumOffset : checksumOffset+4])
+		binary.LittleEndian.PutUint32(workingPayload[checksumOffset:checksumOffset+4], incomingChecksumSeed(currentPeer))
+		if h.config.Checksum.Checksum([]goenet.Buffer{{Data: workingPayload}}) != desired {
+			return nil
+		}
+	}
+
+	for offset < len(workingPayload) {
+		command, _, used, err := protocol.ParseCommand(workingPayload[offset:])
 		if err != nil {
-			return
+			return nil
 		}
 		offset += used
 
 		if currentPeer == nil {
-			if _, ok := command.(protocol.Connect); !ok || offset != len(payload) {
-				return
+			if _, ok := command.(protocol.Connect); !ok || offset != len(workingPayload) {
+				return nil
 			}
 		}
 
 		disposition := h.handleIncomingCommand(header, &currentPeer, command, addr)
 		if disposition == inboundReject {
-			return
+			return nil
 		}
 
 		acknowledgeHeader := commandHeader(command)
@@ -136,11 +188,13 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) {
 			continue
 		}
 		if header.Flags&protocol.HeaderFlagSentTime == 0 {
-			return
+			return nil
 		}
 
 		h.queueAcknowledgement(currentPeer, acknowledgeHeader, header.SentTime)
 	}
+
+	return nil
 }
 
 func (h *Host) lookupPeer(header protocol.Header, addr netip.AddrPort) (*peer.Peer, bool) {
@@ -1078,6 +1132,14 @@ func minUint32(a, b uint32) uint32 {
 		return a
 	}
 	return b
+}
+
+func incomingChecksumSeed(p *peer.Peer) uint32 {
+	if p == nil {
+		return 0
+	}
+
+	return p.ConnectID
 }
 
 func sequenceDistance(anchor, sequence uint16) uint32 {

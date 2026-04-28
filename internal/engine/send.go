@@ -124,7 +124,7 @@ func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) e
 
 func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
-		if blocked := findUnsendableQueuedCommand(p); blocked != nil {
+		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
 			return fmt.Errorf(
 				"engine: queued command %d cannot fit within peer MTU %d",
 				blocked.Command.Header.Command,
@@ -156,14 +156,14 @@ func (h *Host) Flush(ctx context.Context) error {
 	return nil
 }
 
-func findUnsendableQueuedCommand(p *peer.Peer) *peer.OutgoingCommand {
+func findUnsendableQueuedCommand(p *peer.Peer, withChecksum bool) *peer.OutgoingCommand {
 	for elem := p.OutgoingSendReliableCommands.Front(); elem != nil; elem = elem.Next() {
-		if !commandFitsPeerMTU(p, elem.Value()) {
+		if !commandFitsPeerMTU(p, elem.Value(), withChecksum) {
 			return elem.Value()
 		}
 	}
 	for elem := p.OutgoingCommands.Front(); elem != nil; elem = elem.Next() {
-		if !commandFitsPeerMTU(p, elem.Value()) {
+		if !commandFitsPeerMTU(p, elem.Value(), withChecksum) {
 			return elem.Value()
 		}
 	}
@@ -184,22 +184,52 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 		return preparedDatagram{}, false, nil
 	}
 
-	header := protocol.Header{}
-	header.PeerID = p.OutgoingPeerID
-	header.SessionID = p.OutgoingSessionID
+	header := protocol.Header{
+		PeerID:    p.OutgoingPeerID,
+		SessionID: p.OutgoingSessionID,
+	}
 	if batchRequiresAck(selected) {
 		header.Flags = protocol.HeaderFlagSentTime
 		header.SentTime = uint16(h.serviceTime)
 	}
-	payload := header.MarshalBinary(nil)
+
+	body := make([]byte, 0)
 
 	for _, item := range selected {
 		if item.ack != nil {
-			payload = marshalAcknowledgement(item.ack).MarshalBinary(payload)
+			body = marshalAcknowledgement(item.ack).MarshalBinary(body)
 			continue
 		}
-		payload = item.command.Command.Payload.MarshalBinary(payload)
+		body = item.command.Command.Payload.MarshalBinary(body)
 	}
+
+	if h.config.Compressor != nil {
+		compressed := make([]byte, len(body))
+		n, err := h.config.Compressor.Compress([]goenet.Buffer{{Data: body}}, len(body), compressed)
+		if err != nil {
+			return preparedDatagram{}, false, err
+		}
+		if n > 0 && n < len(body) {
+			header.Flags |= protocol.HeaderFlagCompressed
+			body = compressed[:n]
+		}
+	}
+
+	headerBytes := header.MarshalBinary(nil)
+	payload := make([]byte, 0, len(headerBytes)+len(body)+checksumSize(h.config.Checksum))
+	payload = append(payload, headerBytes...)
+	if h.config.Checksum != nil {
+		checksumBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(checksumBytes, outgoingChecksumSeed(p))
+		sum := h.config.Checksum.Checksum([]goenet.Buffer{
+			{Data: headerBytes},
+			{Data: checksumBytes},
+			{Data: body},
+		})
+		binary.LittleEndian.PutUint32(checksumBytes, sum)
+		payload = append(payload, checksumBytes...)
+	}
+	payload = append(payload, body...)
 
 	return preparedDatagram{
 		payload:  payload,
@@ -287,10 +317,7 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) ([]outgoingSelection, *outgoing
 		}
 
 		nextHasAck := hasAck || next.requiresAck
-		headerSize := protocolHeaderSizeWithoutSentTime
-		if nextHasAck {
-			headerSize = protocolHeaderSizeWithSentTime
-		}
+		headerSize := headerOverhead(nextHasAck, h.config.Checksum != nil)
 
 		if headerSize+bodySize+next.wireSize > int(p.MTU) {
 			if len(selected) == 0 {
@@ -345,13 +372,8 @@ func commandWireSize(cmd *peer.OutgoingCommand) int {
 	return len(cmd.Command.Payload.MarshalBinary(nil))
 }
 
-func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand) bool {
-	headerSize := protocolHeaderSizeWithoutSentTime
-	if commandRequiresAck(cmd) {
-		headerSize = protocolHeaderSizeWithSentTime
-	}
-
-	return headerSize+commandWireSize(cmd) <= int(p.MTU)
+func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand, withChecksum bool) bool {
+	return headerOverhead(commandRequiresAck(cmd), withChecksum)+commandWireSize(cmd) <= int(p.MTU)
 }
 
 func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
@@ -372,22 +394,22 @@ func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {
 	if len(packet.Data) > math.MaxUint16 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
-	if len(packet.Data) > maxPacketDataLength(p, packet.Flags) {
+	if len(packet.Data) > h.maxPacketDataLength(p, packet.Flags) {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
 
 	return nil
 }
 
-func maxPacketDataLength(p *peer.Peer, flags goenet.PacketFlag) int {
-	headerSize := protocolHeaderSizeWithoutSentTime
+func (h *Host) maxPacketDataLength(p *peer.Peer, flags goenet.PacketFlag) int {
 	commandSize := sendUnreliableCommandSize
+	requiresSentTime := false
 	if flags&goenet.PacketFlagReliable != 0 {
-		headerSize = protocolHeaderSizeWithSentTime
+		requiresSentTime = true
 		commandSize = sendReliableCommandSize
 	}
 
-	overhead := headerSize + commandSize
+	overhead := headerOverhead(requiresSentTime, h.config.Checksum != nil) + commandSize
 	if p.MTU <= uint32(overhead) {
 		return 0
 	}
@@ -476,4 +498,32 @@ func applyOutgoingHeader(payload protocol.PacketCommand, header peer.Header) {
 	case *protocol.ThrottleConfigure:
 		cmd.Header = commandHeader
 	}
+}
+
+func headerOverhead(withSentTime, withChecksum bool) int {
+	size := protocolHeaderSizeWithoutSentTime
+	if withSentTime {
+		size = protocolHeaderSizeWithSentTime
+	}
+	if withChecksum {
+		size += 4
+	}
+
+	return size
+}
+
+func checksumSize(checksummer goenet.Checksummer) int {
+	if checksummer == nil {
+		return 0
+	}
+
+	return 4
+}
+
+func outgoingChecksumSeed(p *peer.Peer) uint32 {
+	if p.OutgoingPeerID >= protocol.MaximumPeerID {
+		return 0
+	}
+
+	return p.ConnectID
 }

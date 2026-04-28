@@ -13,6 +13,9 @@ type Config struct {
 	MTU                uint32
 	MaximumPacketSize  uint32
 	MaximumWaitingData uint32
+	Checksum           Checksummer
+	Compressor         Compressor
+	Intercept          Interceptor
 }
 
 // DefaultConfig returns ENet-compatible host defaults.
