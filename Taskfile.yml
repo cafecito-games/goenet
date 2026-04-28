@@ -22,8 +22,11 @@ tasks:
   test:cover:
     desc: Run tests with coverage; output coverage.out.
     cmds:
-      - go test -race -count=1 -coverprofile=coverage.out -covermode=atomic {{.PKG}}
-      - go tool cover -func=coverage.out | tail -1
+      - |
+        coverage_file="${COVERAGE_FILE:-$(mktemp -t goenet-coverage.XXXXXX.out)}"
+        go test -race -count=1 -coverprofile="$coverage_file" -covermode=atomic {{.PKG}}
+        go tool cover -func="$coverage_file" | tail -1
+        echo "coverage profile: $coverage_file"
 
   lint:
     desc: Run golangci-lint.

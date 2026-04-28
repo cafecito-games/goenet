@@ -42,6 +42,8 @@ jobs:
         run: task ci
 
       - name: Run coverage
+        env:
+          COVERAGE_FILE: coverage.out
         run: task test:cover
 
       - name: Upload coverage
