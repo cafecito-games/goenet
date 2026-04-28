@@ -31,7 +31,6 @@ repos:
         name: task tidy:check
         entry: task tidy:check
         language: system
-        types: [go]
         pass_filenames: false
 
       - id: task-test
