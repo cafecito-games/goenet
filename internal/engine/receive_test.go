@@ -40,6 +40,7 @@ func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 			PacketThrottleAcceleration: 2,
 			PacketThrottleDeceleration: 3,
 			ConnectID:                  0x11223344,
+			Data:                       0x55667788,
 		},
 	))
 
@@ -99,6 +100,9 @@ func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 	}
 	if event.Peer != raw {
 		t.Fatalf("second event peer = %p, want %p", event.Peer, raw)
+	}
+	if event.Data != 0x55667788 {
+		t.Fatalf("second event data = %#x", event.Data)
 	}
 	if raw.State != goenet.PeerStateConnected {
 		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateConnected)
@@ -392,6 +396,352 @@ func TestServiceAppliesVerifyConnectForConnectingPeer(t *testing.T) {
 	_, ackCommand := mustSingleCommand(t, sock.MustWrite(t, 0).Payload)
 	if _, ok := ackCommand.(iprotocol.Acknowledge); !ok {
 		t.Fatalf("ack command type = %T", ackCommand)
+	}
+}
+
+func TestServiceAcknowledgesDroppedReliableDuplicate(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x2222,
+		},
+		iprotocol.SendReliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 0,
+			},
+			Data: []byte("dup"),
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("event type = %d, want 0", event.Type)
+	}
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("WriteCount = %d, want 1", got)
+	}
+
+	_, ackCommand := mustSingleCommand(t, sock.MustWrite(t, 0).Payload)
+	ack, ok := ackCommand.(iprotocol.Acknowledge)
+	if !ok {
+		t.Fatalf("ack command type = %T", ackCommand)
+	}
+	if ack.ReceivedReliableSequenceNumber != 0 {
+		t.Fatalf("ack received reliable sequence = %d", ack.ReceivedReliableSequenceNumber)
+	}
+	if ack.ReceivedSentTime != 0x2222 {
+		t.Fatalf("ack received sent time = %#x", ack.ReceivedSentTime)
+	}
+}
+
+func TestServiceDropsStaleUnreliableCommandBeforeDispatchingFreshOne(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+	raw.Channels[0].IncomingReliableSequenceNumber = 1
+
+	stale := &ipeer.IncomingCommand{
+		ReliableSequenceNumber:   0,
+		UnreliableSequenceNumber: 1,
+		Command: ipeer.Command{
+			Header: ipeer.Header{
+				Command:                iprotocol.CommandSendUnreliableFragment,
+				ChannelID:              0,
+				ReliableSequenceNumber: 0,
+			},
+		},
+		Packet: &goenet.Packet{Data: []byte("stale")},
+	}
+	stale.SetFragmentCount(1)
+	raw.AddWaitingData(uint32(len(stale.Packet.Data)))
+	raw.Channels[0].InsertIncomingUnreliableOrdered(stale)
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+		},
+		iprotocol.SendUnreliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			UnreliableSequenceNumber: 1,
+			Data:                     []byte("fresh"),
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventReceive)
+	}
+	if got := string(event.Packet.Data); got != "fresh" {
+		t.Fatalf("event packet = %q", got)
+	}
+	if got := raw.Channels[0].IncomingUnreliableCommands.Len(); got != 0 {
+		t.Fatalf("IncomingUnreliableCommands.Len() = %d", got)
+	}
+	if got := raw.TotalWaitingData; got != 0 {
+		t.Fatalf("TotalWaitingData = %d", got)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+}
+
+func TestServiceDropsDuplicateAndFarAheadUnsequencedGroups(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	queue := func(group uint16, data string) {
+		sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+			iprotocol.Header{
+				PeerID:    raw.IncomingPeerID,
+				SessionID: raw.IncomingSessionID,
+			},
+			iprotocol.SendUnsequenced{
+				Header: iprotocol.CommandHeader{
+					ChannelID: 0,
+					Flags:     iprotocol.CommandFlagUnsequenced,
+				},
+				UnsequencedGroup: group,
+				Data:             []byte(data),
+			},
+		))
+	}
+
+	queue(5, "one")
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventReceive || string(event.Packet.Data) != "one" {
+		t.Fatalf("first event = %#v", event)
+	}
+
+	queue(5, "dup")
+	event, err = host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("duplicate event type = %d, want 0", event.Type)
+	}
+
+	queue(32768, "far")
+	event, err = host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("far-ahead event type = %d, want 0", event.Type)
+	}
+}
+
+func TestServiceDropsPayloadCommandsWhileDisconnectLaterButStillAcknowledgesReliableOnes(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateDisconnectLater)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x1010,
+		},
+		iprotocol.SendReliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			Data: []byte("drop"),
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("event type = %d, want 0", event.Type)
+	}
+	if got := raw.DispatchedCommands.Len(); got != 0 {
+		t.Fatalf("DispatchedCommands.Len() = %d", got)
+	}
+	if got := raw.Acknowledgements.Len(); got != 0 {
+		t.Fatalf("Acknowledgements.Len() = %d", got)
+	}
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+
+	_, ackCommand := mustSingleCommand(t, sock.MustWrite(t, 0).Payload)
+	if _, ok := ackCommand.(iprotocol.Acknowledge); !ok {
+		t.Fatalf("ack command type = %T", ackCommand)
+	}
+}
+
+func TestServiceRejectsInboundPayloadLargerThanMaximumPacketSize(t *testing.T) {
+	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+		cfg.MaximumPacketSize = 3
+	})
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x3030,
+		},
+		iprotocol.SendReliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			Data: []byte("four"),
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("event type = %d, want 0", event.Type)
+	}
+	if got := raw.DispatchedCommands.Len(); got != 0 {
+		t.Fatalf("DispatchedCommands.Len() = %d", got)
+	}
+	if got := raw.Acknowledgements.Len(); got != 0 {
+		t.Fatalf("Acknowledgements.Len() = %d", got)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+}
+
+func TestServiceRejectsZeroLengthReliableFragment(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x4040,
+		},
+		iprotocol.SendFragment{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			StartSequenceNumber: 1,
+			FragmentCount:       1,
+			FragmentNumber:      0,
+			TotalLength:         1,
+			FragmentOffset:      0,
+			Data:                nil,
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != 0 {
+		t.Fatalf("event type = %d, want 0", event.Type)
+	}
+	if got := raw.DispatchedCommands.Len(); got != 0 {
+		t.Fatalf("DispatchedCommands.Len() = %d", got)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("WriteCount = %d", got)
+	}
+}
+
+func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x5050,
+		},
+		iprotocol.Disconnect{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0xFF,
+				Flags:                  iprotocol.CommandFlagAcknowledge,
+				ReliableSequenceNumber: 1,
+			},
+			Data: 0x99aabbcc,
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != goenet.EventDisconnect {
+		t.Fatalf("event type = %d, want %d", event.Type, goenet.EventDisconnect)
+	}
+	if event.Peer != raw {
+		t.Fatalf("event peer = %p, want %p", event.Peer, raw)
+	}
+	if event.Data != 0x99aabbcc {
+		t.Fatalf("event data = %#x", event.Data)
+	}
+	if raw.State != goenet.PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", raw.State, goenet.PeerStateDisconnected)
+	}
+	if raw.OutgoingPeerID != iprotocol.MaximumPeerID {
+		t.Fatalf("OutgoingPeerID = %d, want %d", raw.OutgoingPeerID, iprotocol.MaximumPeerID)
+	}
+	if got := len(raw.Channels); got != 0 {
+		t.Fatalf("len(raw.Channels) = %d, want 0", got)
+	}
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("WriteCount = %d, want 1", got)
+	}
+}
+
+func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
+	cfg := goenet.DefaultConfig()
+	sock := testsupport.NewFakeSocket()
+	host := NewHost(cfg, sock, 0)
+	peer := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), goenet.PeerStateConnected)
+
+	if got := len(peer.Channels); got != int(iprotocol.MaximumChannelCount) {
+		t.Fatalf("len(peer.Channels) = %d, want %d", got, iprotocol.MaximumChannelCount)
 	}
 }
 

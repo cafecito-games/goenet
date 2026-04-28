@@ -40,7 +40,7 @@ func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint3
 		cfg.MaximumWaitingData = config.MaximumWaitingData
 	}
 	if cfg.ChannelLimit == 0 {
-		cfg.ChannelLimit = 1
+		cfg.ChannelLimit = uint8(protocolMaximumPeerID >> 4)
 	}
 
 	host := &Host{

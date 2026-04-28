@@ -16,10 +16,21 @@ const (
 	peerReliableWindows                      = 16
 	peerReliableWindowSize                   = 0x1000
 	peerFreeReliableWindows                  = 8
+	peerUnsequencedWindows                   = 64
+	peerUnsequencedWindowSize                = 1024
+	peerFreeUnsequencedWindows               = 32
 	protocolMaximumFragmentCount      uint32 = 1024 * 1024
 	defaultPacketThrottleInterval     uint32 = 5000
 	defaultPacketThrottleAcceleration        = 2
 	defaultPacketThrottleDeceleration        = 2
+)
+
+type inboundDisposition uint8
+
+const (
+	inboundReject inboundDisposition = iota
+	inboundIgnore
+	inboundAccept
 )
 
 type Event struct {
@@ -115,12 +126,13 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) {
 			}
 		}
 
-		if !h.handleIncomingCommand(header, &currentPeer, command, addr) {
+		disposition := h.handleIncomingCommand(header, &currentPeer, command, addr)
+		if disposition == inboundReject {
 			return
 		}
 
 		acknowledgeHeader := commandHeader(command)
-		if acknowledgeHeader.Flags&protocol.CommandFlagAcknowledge == 0 || currentPeer == nil {
+		if disposition == inboundReject || acknowledgeHeader.Flags&protocol.CommandFlagAcknowledge == 0 || currentPeer == nil {
 			continue
 		}
 		if header.Flags&protocol.HeaderFlagSentTime == 0 {
@@ -161,47 +173,83 @@ func (h *Host) handleIncomingCommand(
 	currentPeer **peer.Peer,
 	command protocol.PacketCommand,
 	addr netip.AddrPort,
-) bool {
+) inboundDisposition {
 	switch cmd := command.(type) {
 	case protocol.Acknowledge:
-		return *currentPeer != nil && h.handleAcknowledge(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		if h.handleAcknowledge(*currentPeer, cmd) {
+			return inboundAccept
+		}
+		return inboundReject
 	case protocol.Connect:
 		if *currentPeer != nil {
-			return false
+			return inboundReject
 		}
 		peer := h.handleConnect(addr, cmd)
 		if peer == nil {
-			return false
+			return inboundReject
 		}
 		*currentPeer = peer
-		return true
+		return inboundAccept
 	case protocol.VerifyConnect:
-		return *currentPeer != nil && h.handleVerifyConnect(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return h.handleVerifyConnect(*currentPeer, cmd)
 	case protocol.Disconnect:
-		return *currentPeer != nil
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return h.handleDisconnect(*currentPeer, cmd)
 	case protocol.Ping:
-		return *currentPeer != nil
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return inboundAccept
 	case protocol.SendReliable:
-		return *currentPeer != nil && h.handleSendReliable(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return h.handleSendReliable(*currentPeer, cmd)
 	case protocol.SendUnreliable:
-		return *currentPeer != nil && h.handleSendUnreliable(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return h.handleSendUnreliable(*currentPeer, cmd)
 	case protocol.SendUnsequenced:
-		return *currentPeer != nil && h.handleSendUnsequenced(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		return h.handleSendUnsequenced(*currentPeer, cmd)
 	case protocol.SendFragment:
 		if *currentPeer == nil {
-			return false
+			return inboundReject
 		}
 		if cmd.Header.Command == protocol.CommandSendUnreliableFragment {
 			return h.handleSendUnreliableFragment(*currentPeer, cmd)
 		}
 		return h.handleSendFragment(*currentPeer, cmd)
 	case protocol.BandwidthLimit:
-		return *currentPeer != nil && h.handleBandwidthLimit(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		if h.handleBandwidthLimit(*currentPeer, cmd) {
+			return inboundAccept
+		}
+		return inboundReject
 	case protocol.ThrottleConfigure:
-		return *currentPeer != nil && h.handleThrottleConfigure(*currentPeer, cmd)
+		if *currentPeer == nil {
+			return inboundReject
+		}
+		if h.handleThrottleConfigure(*currentPeer, cmd) {
+			return inboundAccept
+		}
+		return inboundReject
 	default:
 		_ = packetHeader
-		return false
+		return inboundReject
 	}
 }
 
@@ -249,6 +297,7 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 	selected.IncomingSessionID = outgoingSessionID
 
 	runtime := h.runtime[selected]
+	runtime.eventData = command.Data
 	runtime.packetThrottleInterval = command.PacketThrottleInterval
 	runtime.packetThrottleAcceleration = command.PacketThrottleAcceleration
 	runtime.packetThrottleDeceleration = command.PacketThrottleDeceleration
@@ -285,16 +334,16 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 	return selected
 }
 
-func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect) bool {
+func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect) inboundDisposition {
 	if p.State != goenet.PeerStateConnecting {
-		return true
+		return inboundIgnore
 	}
 
 	runtime := h.runtime[p]
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
 		p.State = goenet.PeerStateZombie
 		h.enqueuePeerDispatch(p)
-		return false
+		return inboundReject
 	}
 	if command.PacketThrottleInterval != runtime.packetThrottleInterval ||
 		command.PacketThrottleAcceleration != runtime.packetThrottleAcceleration ||
@@ -302,7 +351,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 		command.ConnectID != p.ConnectID {
 		p.State = goenet.PeerStateZombie
 		h.enqueuePeerDispatch(p)
-		return false
+		return inboundReject
 	}
 
 	h.removeSentReliableCommand(p, 1, 0xFF)
@@ -319,7 +368,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 	runtime.windowSize = minUint32(runtime.windowSize, clampUint32(command.WindowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize))
 
 	h.notifyConnect(p)
-	return true
+	return inboundAccept
 }
 
 func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) bool {
@@ -338,9 +387,39 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 	return true
 }
 
-func (h *Host) handleSendReliable(p *peer.Peer, command protocol.SendReliable) bool {
+func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inboundDisposition {
+	if p.State == goenet.PeerStateDisconnected || p.State == goenet.PeerStateZombie || p.State == goenet.PeerStateAcknowledgingDisconnect {
+		return inboundIgnore
+	}
+
+	h.clearPeerQueues(p)
+
+	switch p.State {
+	case goenet.PeerStateConnectionSucceeded, goenet.PeerStateDisconnecting, goenet.PeerStateConnecting:
+		h.runtime[p].eventData = command.Data
+		p.State = goenet.PeerStateZombie
+		h.enqueuePeerDispatch(p)
+	case goenet.PeerStateConnected, goenet.PeerStateDisconnectLater:
+		h.runtime[p].eventData = command.Data
+		if command.Header.Flags&protocol.CommandFlagAcknowledge != 0 {
+			p.State = goenet.PeerStateAcknowledgingDisconnect
+		} else {
+			p.State = goenet.PeerStateZombie
+			h.enqueuePeerDispatch(p)
+		}
+	default:
+		h.resetPeer(p)
+	}
+
+	return inboundAccept
+}
+
+func (h *Host) handleSendReliable(p *peer.Peer, command protocol.SendReliable) inboundDisposition {
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
-		return false
+		return inboundReject
+	}
+	if len(command.Data) > int(h.config.MaximumPacketSize) {
+		return inboundReject
 	}
 
 	packet := &goenet.Packet{
@@ -363,9 +442,12 @@ func (h *Host) handleSendReliable(p *peer.Peer, command protocol.SendReliable) b
 	return h.queueReliableIncomingCommand(p, cmd)
 }
 
-func (h *Host) handleSendUnreliable(p *peer.Peer, command protocol.SendUnreliable) bool {
+func (h *Host) handleSendUnreliable(p *peer.Peer, command protocol.SendUnreliable) inboundDisposition {
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
-		return false
+		return inboundReject
+	}
+	if len(command.Data) > int(h.config.MaximumPacketSize) {
+		return inboundReject
 	}
 
 	packet := &goenet.Packet{Data: append([]byte(nil), command.Data...)}
@@ -386,12 +468,37 @@ func (h *Host) handleSendUnreliable(p *peer.Peer, command protocol.SendUnreliabl
 	return h.queueUnreliableIncomingCommand(p, cmd)
 }
 
-func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequenced) bool {
+func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequenced) inboundDisposition {
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
-		return false
+		return inboundReject
+	}
+	if len(command.Data) > int(h.config.MaximumPacketSize) {
+		return inboundReject
+	}
+	if p.State == goenet.PeerStateDisconnectLater {
+		return inboundIgnore
+	}
+
+	unsequencedGroup := uint32(command.UnsequencedGroup)
+	index := unsequencedGroup % peerUnsequencedWindowSize
+	if unsequencedGroup < uint32(p.IncomingUnsequencedGroup) {
+		unsequencedGroup += 0x10000
+	}
+	if unsequencedGroup >= uint32(p.IncomingUnsequencedGroup)+peerFreeUnsequencedWindows*peerUnsequencedWindowSize {
+		return inboundIgnore
+	}
+
+	groupBase := uint16(unsequencedGroup-index) & 0xFFFF
+	if groupBase != p.IncomingUnsequencedGroup {
+		p.IncomingUnsequencedGroup = groupBase
+		for i := range p.UnsequencedWindow {
+			p.UnsequencedWindow[i] = 0
+		}
+	} else if p.UnsequencedWindow[index/32]&(uint32(1)<<(index%32)) != 0 {
+		return inboundIgnore
 	}
 	if !p.CanQueueWaitingData(uint32(len(command.Data)), h.config.MaximumWaitingData) {
-		return false
+		return inboundReject
 	}
 
 	cmd := &peer.IncomingCommand{
@@ -409,19 +516,23 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 	}
 	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
 	p.QueueDispatchedCommand(cmd)
+	p.UnsequencedWindow[index/32] |= uint32(1) << (index % 32)
 	h.enqueuePeerDispatch(p)
-	return true
+	return inboundAccept
 }
 
-func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) bool {
+func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) inboundDisposition {
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
-		return false
+		return inboundReject
+	}
+	if p.State == goenet.PeerStateDisconnectLater {
+		return inboundIgnore
 	}
 
 	channel := &p.Channels[command.Header.ChannelID]
 	startSequence := command.StartSequenceNumber
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, startSequence) {
-		return true
+		return inboundIgnore
 	}
 	if command.FragmentCount == 0 ||
 		command.FragmentCount > protocolMaximumFragmentCount ||
@@ -429,14 +540,15 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) b
 		command.TotalLength > h.config.MaximumPacketSize ||
 		command.TotalLength < command.FragmentCount ||
 		command.FragmentOffset >= command.TotalLength ||
+		len(command.Data) == 0 ||
 		uint32(len(command.Data)) > command.TotalLength-command.FragmentOffset {
-		return false
+		return inboundReject
 	}
 
 	start := h.findReliableFragmentCommand(channel, startSequence)
 	if start == nil {
 		if !p.CanQueueWaitingData(command.TotalLength, h.config.MaximumWaitingData) {
-			return false
+			return inboundReject
 		}
 		start = &peer.IncomingCommand{
 			ReliableSequenceNumber: startSequence,
@@ -457,31 +569,34 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) b
 		p.AddWaitingData(command.TotalLength)
 		channel.InsertIncomingReliableOrdered(start)
 	} else if start.FragmentCount != command.FragmentCount || uint32(len(start.Packet.Data)) != command.TotalLength {
-		return false
+		return inboundReject
 	}
 
 	if !start.MarkFragmentReceived(command.FragmentNumber) {
-		return true
+		return inboundIgnore
 	}
 	copy(start.Packet.Data[int(command.FragmentOffset):int(command.FragmentOffset)+len(command.Data)], command.Data)
 	if start.IsComplete() {
 		h.dispatchReliableCommands(p, channel)
 	}
-	return true
+	return inboundAccept
 }
 
-func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendFragment) bool {
+func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendFragment) inboundDisposition {
 	if !canReceiveOnChannel(p, command.Header.ChannelID) {
-		return false
+		return inboundReject
+	}
+	if p.State == goenet.PeerStateDisconnectLater {
+		return inboundIgnore
 	}
 
 	channel := &p.Channels[command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, command.Header.ReliableSequenceNumber) {
-		return true
+		return inboundIgnore
 	}
 	if command.Header.ReliableSequenceNumber == channel.IncomingReliableSequenceNumber &&
 		command.StartSequenceNumber <= channel.IncomingUnreliableSequenceNumber {
-		return true
+		return inboundIgnore
 	}
 	if command.FragmentCount == 0 ||
 		command.FragmentCount > protocolMaximumFragmentCount ||
@@ -489,14 +604,15 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 		command.TotalLength > h.config.MaximumPacketSize ||
 		command.TotalLength < command.FragmentCount ||
 		command.FragmentOffset >= command.TotalLength ||
+		len(command.Data) == 0 ||
 		uint32(len(command.Data)) > command.TotalLength-command.FragmentOffset {
-		return false
+		return inboundReject
 	}
 
 	start := h.findUnreliableFragmentCommand(channel, command.Header.ReliableSequenceNumber, command.StartSequenceNumber)
 	if start == nil {
 		if !p.CanQueueWaitingData(command.TotalLength, h.config.MaximumWaitingData) {
-			return false
+			return inboundReject
 		}
 		start = &peer.IncomingCommand{
 			ReliableSequenceNumber:   command.Header.ReliableSequenceNumber,
@@ -515,17 +631,17 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 		p.AddWaitingData(command.TotalLength)
 		channel.InsertIncomingUnreliableOrdered(start)
 	} else if start.FragmentCount != command.FragmentCount || uint32(len(start.Packet.Data)) != command.TotalLength {
-		return false
+		return inboundReject
 	}
 
 	if !start.MarkFragmentReceived(command.FragmentNumber) {
-		return true
+		return inboundIgnore
 	}
 	copy(start.Packet.Data[int(command.FragmentOffset):int(command.FragmentOffset)+len(command.Data)], command.Data)
 	if start.IsComplete() {
 		h.dispatchUnreliableCommands(p, channel)
 	}
-	return true
+	return inboundAccept
 }
 
 func (h *Host) handleBandwidthLimit(p *peer.Peer, command protocol.BandwidthLimit) bool {
@@ -549,18 +665,21 @@ func (h *Host) handleThrottleConfigure(p *peer.Peer, command protocol.ThrottleCo
 	return true
 }
 
-func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) bool {
+func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) inboundDisposition {
+	if p.State == goenet.PeerStateDisconnectLater {
+		return inboundIgnore
+	}
 	channel := &p.Channels[cmd.Command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, cmd.ReliableSequenceNumber) {
-		return true
+		return inboundIgnore
 	}
 	if cmd.ReliableSequenceNumber == channel.IncomingReliableSequenceNumber {
-		return true
+		return inboundIgnore
 	}
 	for elem := channel.IncomingReliableCommands.Back(); elem != nil; elem = elem.Prev() {
 		existing := elem.Value()
 		if existing.ReliableSequenceNumber == cmd.ReliableSequenceNumber {
-			return true
+			return inboundIgnore
 		}
 		if sequenceDistance(channel.IncomingReliableSequenceNumber, existing.ReliableSequenceNumber) <
 			sequenceDistance(channel.IncomingReliableSequenceNumber, cmd.ReliableSequenceNumber) {
@@ -568,23 +687,26 @@ func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingComm
 		}
 	}
 	if !p.CanQueueWaitingData(uint32(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
-		return false
+		return inboundReject
 	}
 
 	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
 	channel.InsertIncomingReliableOrdered(cmd)
 	h.dispatchReliableCommands(p, channel)
-	return true
+	return inboundAccept
 }
 
-func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) bool {
+func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCommand) inboundDisposition {
+	if p.State == goenet.PeerStateDisconnectLater {
+		return inboundIgnore
+	}
 	channel := &p.Channels[cmd.Command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, cmd.ReliableSequenceNumber) {
-		return true
+		return inboundIgnore
 	}
 	if cmd.ReliableSequenceNumber == channel.IncomingReliableSequenceNumber &&
 		cmd.UnreliableSequenceNumber <= channel.IncomingUnreliableSequenceNumber {
-		return true
+		return inboundIgnore
 	}
 	for elem := channel.IncomingUnreliableCommands.Back(); elem != nil; elem = elem.Prev() {
 		existing := elem.Value()
@@ -595,20 +717,20 @@ func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCo
 			continue
 		}
 		if existing.UnreliableSequenceNumber == cmd.UnreliableSequenceNumber {
-			return true
+			return inboundIgnore
 		}
 		if existing.UnreliableSequenceNumber < cmd.UnreliableSequenceNumber {
 			break
 		}
 	}
 	if !p.CanQueueWaitingData(uint32(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
-		return false
+		return inboundReject
 	}
 
 	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
 	channel.InsertIncomingUnreliableOrdered(cmd)
 	h.dispatchUnreliableCommands(p, channel)
-	return true
+	return inboundAccept
 }
 
 func (h *Host) dispatchReliableCommands(p *peer.Peer, channel *peer.Channel) {
@@ -644,12 +766,24 @@ func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
 			break
 		}
 		cmd := front.Value()
-		if cmd.Command.Header.Command != protocol.CommandSendUnsequenced {
-			if cmd.ReliableSequenceNumber != channel.IncomingReliableSequenceNumber || !cmd.IsComplete() {
-				break
-			}
-			channel.MarkIncomingUnreliableDispatched(cmd)
+		if cmd.Command.Header.Command == protocol.CommandSendUnsequenced {
+			channel.IncomingUnreliableCommands.Remove(front)
+			p.QueueDispatchedCommand(cmd)
+			moved = true
+			continue
 		}
+
+		if shouldDropUnreliable(channel, cmd) {
+			channel.IncomingUnreliableCommands.Remove(front)
+			if cmd.Packet != nil {
+				p.ReleaseWaitingData(uint32(len(cmd.Packet.Data)))
+			}
+			continue
+		}
+		if cmd.ReliableSequenceNumber != channel.IncomingReliableSequenceNumber || !cmd.IsComplete() {
+			break
+		}
+		channel.MarkIncomingUnreliableDispatched(cmd)
 		channel.IncomingUnreliableCommands.Remove(front)
 		p.QueueDispatchedCommand(cmd)
 		moved = true
@@ -657,6 +791,21 @@ func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
 	if moved {
 		h.enqueuePeerDispatch(p)
 	}
+}
+
+func shouldDropUnreliable(channel *peer.Channel, cmd *peer.IncomingCommand) bool {
+	reliableWindow := cmd.ReliableSequenceNumber / peerReliableWindowSize
+	currentWindow := channel.IncomingReliableSequenceNumber / peerReliableWindowSize
+	if cmd.ReliableSequenceNumber < channel.IncomingReliableSequenceNumber {
+		reliableWindow += peerReliableWindows
+	}
+	if reliableWindow < currentWindow || reliableWindow >= currentWindow+peerFreeReliableWindows-1 {
+		return true
+	}
+	if cmd.ReliableSequenceNumber != channel.IncomingReliableSequenceNumber {
+		return false
+	}
+	return cmd.UnreliableSequenceNumber <= channel.IncomingUnreliableSequenceNumber
 }
 
 func (h *Host) dispatchEvent() (Event, bool) {
@@ -689,10 +838,12 @@ func (h *Host) dispatchEvent() (Event, bool) {
 				Packet:    cmd.Packet,
 			}, true
 		case goenet.PeerStateZombie:
+			data := h.runtime[p].eventData
+			h.resetPeer(p)
 			return Event{
 				Type: goenet.EventDisconnect,
 				Peer: p,
-				Data: h.runtime[p].eventData,
+				Data: data,
 			}, true
 		}
 	}
@@ -708,6 +859,17 @@ func (h *Host) enqueuePeerDispatch(p *peer.Peer) {
 	h.dispatchQ = append(h.dispatchQ, p)
 }
 
+func (h *Host) removePeerDispatch(p *peer.Peer) {
+	delete(h.dispatchSet, p)
+	filtered := h.dispatchQ[:0]
+	for _, queued := range h.dispatchQ {
+		if queued != p {
+			filtered = append(filtered, queued)
+		}
+	}
+	h.dispatchQ = filtered
+}
+
 func (h *Host) notifyConnect(p *peer.Peer) {
 	if p.State == goenet.PeerStateConnecting {
 		p.State = goenet.PeerStateConnectionSucceeded
@@ -717,12 +879,74 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 	h.enqueuePeerDispatch(p)
 }
 
+func (h *Host) clearPeerQueues(p *peer.Peer) {
+	state := p.State
+	incomingPeerID := p.IncomingPeerID
+	outgoingPeerID := p.OutgoingPeerID
+	connectID := p.ConnectID
+	outgoingSessionID := p.OutgoingSessionID
+	incomingSessionID := p.IncomingSessionID
+	mtu := p.MTU
+	address := p.Address
+	incomingBandwidth := p.IncomingBandwidth
+	outgoingBandwidth := p.OutgoingBandwidth
+	outgoingReliableSequenceNumber := p.OutgoingReliableSequenceNumber
+	incomingUnsequencedGroup := p.IncomingUnsequencedGroup
+	unsequencedWindow := p.UnsequencedWindow
+
+	h.removePeerDispatch(p)
+	*p = peer.Peer{
+		OutgoingReliableSequenceNumber: outgoingReliableSequenceNumber,
+		OutgoingPeerID:                 outgoingPeerID,
+		IncomingPeerID:                 incomingPeerID,
+		ConnectID:                      connectID,
+		OutgoingSessionID:              outgoingSessionID,
+		IncomingSessionID:              incomingSessionID,
+		MTU:                            mtu,
+		Address:                        address,
+		State:                          state,
+		IncomingBandwidth:              incomingBandwidth,
+		OutgoingBandwidth:              outgoingBandwidth,
+		IncomingUnsequencedGroup:       incomingUnsequencedGroup,
+		UnsequencedWindow:              unsequencedWindow,
+	}
+}
+
+func (h *Host) resetPeer(p *peer.Peer) {
+	incomingPeerID := p.IncomingPeerID
+	connectID := p.ConnectID
+
+	h.removePeerDispatch(p)
+	*p = peer.Peer{
+		OutgoingPeerID:    protocolMaximumPeerID,
+		IncomingPeerID:    incomingPeerID,
+		ConnectID:         connectID,
+		OutgoingSessionID: 0xFF,
+		IncomingSessionID: 0xFF,
+		MTU:               h.config.MTU,
+		State:             goenet.PeerStateDisconnected,
+	}
+	h.runtime[p] = defaultPeerRuntime()
+}
+
 func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader, sentTime uint16) {
 	switch p.State {
 	case goenet.PeerStateDisconnecting, goenet.PeerStateAcknowledgingConnect, goenet.PeerStateDisconnected, goenet.PeerStateZombie:
 		return
 	case goenet.PeerStateAcknowledgingDisconnect:
 		if header.Command != protocol.CommandDisconnect {
+			return
+		}
+	}
+	if header.ChannelID < uint8(len(p.Channels)) {
+		channel := &p.Channels[header.ChannelID]
+		reliableWindow := header.ReliableSequenceNumber / peerReliableWindowSize
+		currentWindow := channel.IncomingReliableSequenceNumber / peerReliableWindowSize
+		if header.ReliableSequenceNumber < channel.IncomingReliableSequenceNumber {
+			reliableWindow += peerReliableWindows
+		}
+		if reliableWindow >= currentWindow+peerFreeReliableWindows-1 &&
+			reliableWindow <= currentWindow+peerFreeReliableWindows {
 			return
 		}
 	}

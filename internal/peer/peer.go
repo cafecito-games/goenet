@@ -23,6 +23,8 @@ type Peer struct {
 	OutgoingSendReliableCommands   outgoingQueue
 	SentReliableCommands           outgoingQueue
 	DispatchedCommands             incomingQueue
+	IncomingUnsequencedGroup       uint16
+	UnsequencedWindow              [32]uint32
 	TotalWaitingData               uint32
 }
 

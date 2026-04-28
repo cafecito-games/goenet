@@ -215,6 +215,10 @@ func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 				panic("engine: acknowledgement queue commit order mismatch")
 			}
 			p.Acknowledgements.Remove(front)
+			if item.ack.Command.Header.Command == protocol.CommandDisconnect && p.State == goenet.PeerStateAcknowledgingDisconnect {
+				p.State = goenet.PeerStateZombie
+				h.enqueuePeerDispatch(p)
+			}
 			continue
 		}
 
