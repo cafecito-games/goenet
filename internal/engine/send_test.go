@@ -201,12 +201,22 @@ func TestFlushMovesAckCommandFromGeneralQueueInFlightWithWireMetadata(t *testing
 	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
-	queueGeneralCommand(host, peer.Raw, protocolCommand{
-		command:                iprotocol.CommandPing,
-		flags:                  iprotocol.CommandFlagAcknowledge,
-		channelID:              0xff,
-		reliableSequenceNumber: 9,
+	peer.Raw.OutgoingReliableSequenceNumber = 8
+	err := host.queueOutgoingControlCommand(peer.Raw, ipeer.Command{
+		Header: ipeer.Header{
+			Command:   iprotocol.CommandPing,
+			ChannelID: 0xff,
+			Flags:     iprotocol.CommandFlagAcknowledge,
+		},
+		Payload: &protocolCommand{
+			command:   iprotocol.CommandPing,
+			flags:     iprotocol.CommandFlagAcknowledge,
+			channelID: 0xff,
+		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := host.Flush(context.Background()); err != nil {
 		t.Fatal(err)
@@ -225,6 +235,9 @@ func TestFlushMovesAckCommandFromGeneralQueueInFlightWithWireMetadata(t *testing
 	}
 	if cmd.Command.Header.Flags != iprotocol.CommandFlagAcknowledge {
 		t.Fatalf("flags = 0x%02x", cmd.Command.Header.Flags)
+	}
+	if cmd.ReliableSequenceNumber != 9 {
+		t.Fatalf("reliable sequence = %d", cmd.ReliableSequenceNumber)
 	}
 	if cmd.SendAttempts != 1 {
 		t.Fatalf("send attempts = %d", cmd.SendAttempts)
@@ -254,7 +267,7 @@ func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
 	packet := &goenet.Packet{
-		Data: bytesOfLen(int(host.config.MTU-9), 'x'),
+		Data: bytesOfLen(int(peer.Raw.MTU-9), 'x'),
 	}
 	err := host.Send(peer.Raw, 0, packet)
 	if err == nil {
@@ -268,6 +281,22 @@ func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	}
 	if got := peer.SentReliableCount(); got != 0 {
 		t.Fatalf("SentReliableCount = %d", got)
+	}
+}
+
+func TestSendUsesPeerMTUForValidation(t *testing.T) {
+	host, _ := newTestHost(t)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+	peer.Raw.MTU = 20
+
+	err := host.Send(peer.Raw, 0, &goenet.Packet{
+		Data: bytesOfLen(11, 'x'),
+	})
+	if err == nil {
+		t.Fatal("expected oversize packet error")
+	}
+	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -598,30 +627,17 @@ type protocolCommand struct {
 	reliableSequenceNumber uint16
 }
 
-func (c protocolCommand) MarshalBinary(dst []byte) []byte {
+func (c *protocolCommand) setOutgoingSequenceNumbers(reliable, _ uint16) {
+	c.reliableSequenceNumber = reliable
+}
+
+func (c *protocolCommand) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, 4)...)
 	dst[start] = byte(c.command | iprotocol.Command(c.flags))
 	dst[start+1] = c.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], c.reliableSequenceNumber)
 	return dst
-}
-
-func queueGeneralCommand(host *Host, p *ipeer.Peer, payload protocolCommand) {
-	host.totalQueued++
-	p.OutgoingCommands.PushBack(&ipeer.OutgoingCommand{
-		QueueTime:              host.totalQueued,
-		ReliableSequenceNumber: payload.reliableSequenceNumber,
-		Command: ipeer.Command{
-			Header: ipeer.Header{
-				Command:                payload.command,
-				ChannelID:              payload.channelID,
-				Flags:                  payload.flags,
-				ReliableSequenceNumber: payload.reliableSequenceNumber,
-			},
-			Payload: payload,
-		},
-	})
 }
 
 type assertErr string

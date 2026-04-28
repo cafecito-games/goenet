@@ -30,13 +30,21 @@ type preparedDatagram struct {
 	selected []outgoingSelection
 }
 
+type outgoingPayloadSequencer interface {
+	setOutgoingSequenceNumbers(reliable, unreliable uint16)
+}
+
 type sendReliablePayload struct {
 	channelID              uint8
 	reliableSequenceNumber uint16
 	data                   []byte
 }
 
-func (p sendReliablePayload) MarshalBinary(dst []byte) []byte {
+func (p *sendReliablePayload) setOutgoingSequenceNumbers(reliable, _ uint16) {
+	p.reliableSequenceNumber = reliable
+}
+
+func (p *sendReliablePayload) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, 6+len(p.data))...)
 	dst[start] = byte(protocol.CommandSendReliable | protocol.Command(protocol.CommandFlagAcknowledge))
@@ -54,7 +62,12 @@ type sendUnreliablePayload struct {
 	data                     []byte
 }
 
-func (p sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
+func (p *sendUnreliablePayload) setOutgoingSequenceNumbers(reliable, unreliable uint16) {
+	p.reliableSequenceNumber = reliable
+	p.unreliableSequenceNumber = unreliable
+}
+
+func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, 8+len(p.data))...)
 	dst[start] = byte(protocol.CommandSendUnreliable)
@@ -67,59 +80,45 @@ func (p sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 }
 
 func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
-	if err := h.validatePacketSize(packet); err != nil {
+	if err := h.validatePacketSize(p, packet); err != nil {
 		return err
 	}
 
-	channel := &p.Channels[channelID]
 	command := &peer.OutgoingCommand{
 		FragmentLength: uint16(len(packet.Data)),
 		Packet:         packet,
 	}
-	h.totalQueued++
-	command.QueueTime = h.totalQueued
 
-	if packet.Flags&goenet.PacketFlagReliable != 0 || channel.OutgoingUnreliableSequenceNumber >= 0xFFFF {
-		channel.OutgoingReliableSequenceNumber++
-		channel.OutgoingUnreliableSequenceNumber = 0
-
-		command.ReliableSequenceNumber = channel.OutgoingReliableSequenceNumber
+	if packet.Flags&goenet.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber >= 0xFFFF {
 		command.Command = peer.Command{
 			Header: peer.Header{
-				Command:                protocol.CommandSendReliable,
-				ChannelID:              channelID,
-				Flags:                  protocol.CommandFlagAcknowledge,
-				ReliableSequenceNumber: command.ReliableSequenceNumber,
+				Command:   protocol.CommandSendReliable,
+				ChannelID: channelID,
+				Flags:     protocol.CommandFlagAcknowledge,
 			},
-			Payload: sendReliablePayload{
-				channelID:              channelID,
-				reliableSequenceNumber: command.ReliableSequenceNumber,
-				data:                   append([]byte(nil), packet.Data...),
+			Payload: &sendReliablePayload{
+				channelID: channelID,
+				data:      append([]byte(nil), packet.Data...),
 			},
 		}
-		p.OutgoingSendReliableCommands.PushBack(command)
 	} else {
-		channel.OutgoingUnreliableSequenceNumber++
-
-		command.ReliableSequenceNumber = channel.OutgoingReliableSequenceNumber
-		command.UnreliableSequenceNumber = channel.OutgoingUnreliableSequenceNumber
 		command.Command = peer.Command{
 			Header: peer.Header{
-				Command:                protocol.CommandSendUnreliable,
-				ChannelID:              channelID,
-				ReliableSequenceNumber: command.ReliableSequenceNumber,
+				Command:   protocol.CommandSendUnreliable,
+				ChannelID: channelID,
 			},
-			Payload: sendUnreliablePayload{
-				channelID:                channelID,
-				reliableSequenceNumber:   command.ReliableSequenceNumber,
-				unreliableSequenceNumber: command.UnreliableSequenceNumber,
-				data:                     append([]byte(nil), packet.Data...),
+			Payload: &sendUnreliablePayload{
+				channelID: channelID,
+				data:      append([]byte(nil), packet.Data...),
 			},
 		}
-		p.OutgoingCommands.PushBack(command)
 	}
 
-	return nil
+	return h.setupAndQueueOutgoingCommand(p, command)
+}
+
+func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) error {
+	return h.setupAndQueueOutgoingCommand(p, &peer.OutgoingCommand{Command: command})
 }
 
 func (h *Host) Flush(ctx context.Context) error {
@@ -229,7 +228,7 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) []outgoingSelection {
 		}
 
 		if len(selected) >= int(protocol.MaximumPacketCommands) ||
-			headerSize+bodySize+next.wireSize > int(h.config.MTU) {
+			headerSize+bodySize+next.wireSize > int(p.MTU) {
 			break
 		}
 
@@ -268,21 +267,21 @@ func commandWireSize(cmd *peer.OutgoingCommand) int {
 	return len(cmd.Command.Payload.MarshalBinary(nil))
 }
 
-func (h *Host) validatePacketSize(packet *goenet.Packet) error {
+func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {
 	if packet.Flags&goenet.PacketFlagUnsequenced != 0 {
 		return fmt.Errorf("engine: unsequenced packets are not supported in task 5")
 	}
 	if len(packet.Data) > math.MaxUint16 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
-	if len(packet.Data) > h.maxPacketDataLength(packet.Flags) {
+	if len(packet.Data) > maxPacketDataLength(p, packet.Flags) {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
 
 	return nil
 }
 
-func (h *Host) maxPacketDataLength(flags goenet.PacketFlag) int {
+func maxPacketDataLength(p *peer.Peer, flags goenet.PacketFlag) int {
 	headerSize := protocolHeaderSizeWithoutSentTime
 	commandSize := sendUnreliableCommandSize
 	if flags&goenet.PacketFlagReliable != 0 {
@@ -291,9 +290,65 @@ func (h *Host) maxPacketDataLength(flags goenet.PacketFlag) int {
 	}
 
 	overhead := headerSize + commandSize
-	if h.config.MTU <= uint32(overhead) {
+	if p.MTU <= uint32(overhead) {
 		return 0
 	}
 
-	return int(h.config.MTU) - overhead
+	return int(p.MTU) - overhead
+}
+
+func (h *Host) setupAndQueueOutgoingCommand(p *peer.Peer, command *peer.OutgoingCommand) error {
+	if err := h.prepareOutgoingCommand(p, command); err != nil {
+		return err
+	}
+
+	if commandRequiresAck(command) && command.Packet != nil {
+		p.OutgoingSendReliableCommands.PushBack(command)
+		return nil
+	}
+
+	p.OutgoingCommands.PushBack(command)
+	return nil
+}
+
+func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingCommand) error {
+	channelID := command.Command.Header.ChannelID
+	if channelID != 0xFF && int(channelID) >= len(p.Channels) {
+		return fmt.Errorf("engine: channel %d out of range", channelID)
+	}
+	if command.Command.Header.Flags&protocol.CommandFlagUnsequenced != 0 {
+		return fmt.Errorf("engine: unsequenced commands are not supported in task 5")
+	}
+
+	var reliable, unreliable uint16
+	switch {
+	case channelID == 0xFF:
+		p.OutgoingReliableSequenceNumber++
+		reliable = p.OutgoingReliableSequenceNumber
+	case commandRequiresAck(command):
+		channel := &p.Channels[channelID]
+		channel.OutgoingReliableSequenceNumber++
+		channel.OutgoingUnreliableSequenceNumber = 0
+		reliable = channel.OutgoingReliableSequenceNumber
+	default:
+		channel := &p.Channels[channelID]
+		channel.OutgoingUnreliableSequenceNumber++
+		reliable = channel.OutgoingReliableSequenceNumber
+		unreliable = channel.OutgoingUnreliableSequenceNumber
+	}
+
+	command.ReliableSequenceNumber = reliable
+	command.UnreliableSequenceNumber = unreliable
+	command.SendAttempts = 0
+	command.SentTime = 0
+	command.RoundTripTimeout = 0
+	h.totalQueued++
+	command.QueueTime = h.totalQueued
+	command.Command.Header.ReliableSequenceNumber = reliable
+
+	if sequencer, ok := command.Command.Payload.(outgoingPayloadSequencer); ok {
+		sequencer.setOutgoingSequenceNumbers(reliable, unreliable)
+	}
+
+	return nil
 }

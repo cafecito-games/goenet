@@ -54,6 +54,7 @@ func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
 	}
 
 	p := &peer.Peer{
+		MTU:      h.config.MTU,
 		Address:  addr,
 		State:    state,
 		Channels: channels,
