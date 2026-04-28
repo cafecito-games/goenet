@@ -20,6 +20,7 @@ const (
 
 type outgoingSelection struct {
 	command           *peer.OutgoingCommand
+	ack               *peer.Acknowledgement
 	fromReliableQueue bool
 	requiresAck       bool
 	wireSize          int
@@ -193,6 +194,10 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	payload := header.MarshalBinary(nil)
 
 	for _, item := range selected {
+		if item.ack != nil {
+			payload = marshalAcknowledgement(item.ack).MarshalBinary(payload)
+			continue
+		}
 		payload = item.command.Command.Payload.MarshalBinary(payload)
 	}
 
@@ -204,6 +209,15 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 	for _, item := range datagram.selected {
+		if item.ack != nil {
+			front := p.Acknowledgements.Front()
+			if front == nil || front.Value() != item.ack {
+				panic("engine: acknowledgement queue commit order mismatch")
+			}
+			p.Acknowledgements.Remove(front)
+			continue
+		}
+
 		cmd := removeCommittedCommand(p, item)
 
 		if !item.requiresAck {
@@ -240,6 +254,7 @@ func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {
 }
 
 func (h *Host) selectOutgoingBatch(p *peer.Peer) ([]outgoingSelection, *outgoingSelection) {
+	ackFront := p.Acknowledgements.Front()
 	reliableFront := p.OutgoingSendReliableCommands.Front()
 	outgoingFront := p.OutgoingCommands.Front()
 
@@ -247,9 +262,12 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) ([]outgoingSelection, *outgoing
 	bodySize := 0
 	hasAck := false
 
-	for reliableFront != nil || outgoingFront != nil {
+	for ackFront != nil || reliableFront != nil || outgoingFront != nil {
 		var next outgoingSelection
 		switch {
+		case ackFront != nil:
+			next = buildAckSelection(ackFront.Value())
+			ackFront = ackFront.Next()
 		case reliableFront == nil:
 			next = buildSelection(outgoingFront.Value(), false)
 			outgoingFront = outgoingFront.Next()
@@ -298,6 +316,13 @@ func buildSelection(cmd *peer.OutgoingCommand, fromReliableQueue bool) outgoingS
 	}
 }
 
+func buildAckSelection(ack *peer.Acknowledgement) outgoingSelection {
+	return outgoingSelection{
+		ack:      ack,
+		wireSize: len(marshalAcknowledgement(ack).MarshalBinary(nil)),
+	}
+}
+
 func batchRequiresAck(selected []outgoingSelection) bool {
 	for _, item := range selected {
 		if item.requiresAck {
@@ -323,6 +348,17 @@ func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand) bool {
 	}
 
 	return headerSize+commandWireSize(cmd) <= int(p.MTU)
+}
+
+func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
+	return protocol.Acknowledge{
+		Header: protocol.CommandHeader{
+			ChannelID:              ack.Command.Header.ChannelID,
+			ReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
+		},
+		ReceivedReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
+		ReceivedSentTime:               uint16(ack.SentTime),
+	}
 }
 
 func (h *Host) validatePacketSize(p *peer.Peer, packet *goenet.Packet) error {
@@ -403,10 +439,37 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 	h.totalQueued++
 	command.QueueTime = h.totalQueued
 	command.Command.Header.ReliableSequenceNumber = reliable
+	applyOutgoingHeader(command.Command.Payload, command.Command.Header)
 
 	if sequencer, ok := command.Command.Payload.(outgoingPayloadSequencer); ok {
 		sequencer.setOutgoingSequenceNumbers(reliable, unreliable)
 	}
 
 	return nil
+}
+
+func applyOutgoingHeader(payload protocol.PacketCommand, header peer.Header) {
+	commandHeader := protocol.CommandHeader{
+		Command:                header.Command,
+		ChannelID:              header.ChannelID,
+		Flags:                  header.Flags,
+		ReliableSequenceNumber: header.ReliableSequenceNumber,
+	}
+
+	switch cmd := payload.(type) {
+	case *protocol.Connect:
+		cmd.Header = commandHeader
+	case *protocol.VerifyConnect:
+		cmd.Header = commandHeader
+	case *protocol.Disconnect:
+		cmd.Header = commandHeader
+	case *protocol.Ping:
+		cmd.Header = commandHeader
+	case *protocol.SendFragment:
+		cmd.Header = commandHeader
+	case *protocol.BandwidthLimit:
+		cmd.Header = commandHeader
+	case *protocol.ThrottleConfigure:
+		cmd.Header = commandHeader
+	}
 }

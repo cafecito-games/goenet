@@ -17,6 +17,9 @@ type Host struct {
 	peers       []*peer.Peer
 	serviceTime uint32
 	totalQueued uint32
+	dispatchSet map[*peer.Peer]struct{}
+	dispatchQ   []*peer.Peer
+	runtime     map[*peer.Peer]*peerRuntime
 }
 
 func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
@@ -40,29 +43,30 @@ func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint3
 		cfg.ChannelLimit = 1
 	}
 
-	return &Host{
+	host := &Host{
 		config:      cfg,
 		socket:      sock,
 		serviceTime: serviceTime,
+		dispatchSet: make(map[*peer.Peer]struct{}),
+		runtime:     make(map[*peer.Peer]*peerRuntime),
 	}
+	for index := 0; index < cfg.PeerCount; index++ {
+		host.peers = append(host.peers, host.newPeerSlot(index))
+	}
+
+	return host
 }
 
 func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
-	channels := make([]peer.Channel, h.config.ChannelLimit)
-	for i := range channels {
-		channels[i] = peer.NewChannel()
+	for index, candidate := range h.peers {
+		if candidate != nil && candidate.State == goenet.PeerStateDisconnected {
+			return h.configurePeer(candidate, index, addr, state)
+		}
 	}
 
-	outgoingPeerID := uint16(len(h.peers) + 1)
-	outgoingSessionID := uint8((len(h.peers) % 3) + 1)
-	p := &peer.Peer{
-		OutgoingPeerID:    outgoingPeerID,
-		OutgoingSessionID: outgoingSessionID,
-		MTU:               h.config.MTU,
-		Address:           addr,
-		State:             state,
-		Channels:          channels,
-	}
+	index := len(h.peers)
+	p := h.newPeerSlot(index)
+	p = h.configurePeer(p, index, addr, state)
 	h.peers = append(h.peers, p)
 	return p
 }
@@ -85,4 +89,42 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *goenet.Packet) error 
 	}
 
 	return h.queueOutgoingCommand(p, channelID, packet)
+}
+
+func (h *Host) newPeerSlot(index int) *peer.Peer {
+	p := &peer.Peer{
+		IncomingPeerID:    uint16(index),
+		OutgoingPeerID:    protocolMaximumPeerID,
+		IncomingSessionID: 0xFF,
+		OutgoingSessionID: 0xFF,
+		MTU:               h.config.MTU,
+		State:             goenet.PeerStateDisconnected,
+	}
+	h.runtime[p] = defaultPeerRuntime()
+	return p
+}
+
+func (h *Host) configurePeer(p *peer.Peer, index int, addr goenet.Address, state goenet.PeerState) *peer.Peer {
+	channels := make([]peer.Channel, h.config.ChannelLimit)
+	for i := range channels {
+		channels[i] = peer.NewChannel()
+	}
+
+	outgoingPeerID := uint16(index + 1)
+	if state == goenet.PeerStateConnecting {
+		outgoingPeerID = protocolMaximumPeerID
+	}
+
+	*p = peer.Peer{
+		IncomingPeerID:    uint16(index),
+		OutgoingPeerID:    outgoingPeerID,
+		IncomingSessionID: 0xFF,
+		OutgoingSessionID: uint8((index % 3) + 1),
+		MTU:               h.config.MTU,
+		Address:           addr,
+		State:             state,
+		Channels:          channels,
+	}
+	h.runtime[p] = defaultPeerRuntime()
+	return p
 }
