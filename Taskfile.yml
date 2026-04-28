@@ -40,13 +40,15 @@ tasks:
     desc: Verify all Go files are formatted (CI use).
     cmds:
       - |
-        unformatted=$(gofmt -l . | grep -v '^vendor/' || true)
+        unformatted=$(gofmt -l .)
+        unformatted=$(printf '%s\n' "$unformatted" | grep -v '^vendor/' || :)
         if [ -n "$unformatted" ]; then
           echo "Unformatted files:"
           echo "$unformatted"
           exit 1
         fi
-        unimported=$(go run golang.org/x/tools/cmd/goimports@v0.44.0 -l . | grep -v '^vendor/' || true)
+        unimported=$(go run golang.org/x/tools/cmd/goimports@v0.44.0 -l .)
+        unimported=$(printf '%s\n' "$unimported" | grep -v '^vendor/' || :)
         if [ -n "$unimported" ]; then
           echo "Files needing goimports:"
           echo "$unimported"

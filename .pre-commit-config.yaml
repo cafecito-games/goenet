@@ -17,14 +17,12 @@ repos:
         name: task fmt:check
         entry: task fmt:check
         language: system
-        types: [go]
         pass_filenames: false
 
       - id: task-lint
         name: task lint
         entry: task lint
         language: system
-        types: [go]
         pass_filenames: false
 
       - id: task-tidy-check
@@ -37,6 +35,5 @@ repos:
         name: task test (fast)
         entry: task test
         language: system
-        types: [go]
         pass_filenames: false
         stages: [pre-commit]
