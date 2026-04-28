@@ -4,98 +4,264 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
-func TestConnectCommandMatchesGolden(t *testing.T) {
-	// connect.bin is an ENetProtocolConnect payload with:
-	// command=CONNECT|ACKNOWLEDGE, channelID=0xff, reliableSequenceNumber=3,
-	// outgoingPeerID=7, incomingSessionID=1, outgoingSessionID=2,
-	// mtu=1400, windowSize=32768, channelCount=2,
-	// incomingBandwidth=60000, outgoingBandwidth=30000,
-	// packetThrottleInterval=5000, packetThrottleAcceleration=2,
-	// packetThrottleDeceleration=3, connectID=0xdeadbeef encoded raw as efbeadde,
-	// data=0x10203040.
-	wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", "connect.bin"))
+func TestCommandHeaderRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	header := protocol.CommandHeader{
+		Command:                protocol.CommandSendFragment,
+		ChannelID:              0x07,
+		Flags:                  protocol.CommandFlagAcknowledge,
+		ReliableSequenceNumber: 0x1234,
+	}
+
+	wire := header.MarshalBinary(nil)
+	wantWire := []byte{0x88, 0x07, 0x12, 0x34}
+	if !bytes.Equal(wire, wantWire) {
+		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)
+	}
+
+	got, err := protocol.ParseCommandHeader(wire)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if got, want := wire[40:44], []byte{0xef, 0xbe, 0xad, 0xde}; !bytes.Equal(got, want) {
-		t.Fatalf("connectID bytes = %x, want %x", got, want)
-	}
-
-	cmd, flags, n, err := protocol.ParseCommand(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if flags != protocol.CommandFlagAcknowledge {
-		t.Fatalf("flags = 0x%02x, want 0x%02x", flags, protocol.CommandFlagAcknowledge)
-	}
-	if n != len(wire) {
-		t.Fatalf("consumed = %d, want %d", n, len(wire))
-	}
-
-	connect, ok := cmd.(protocol.Connect)
-	if !ok {
-		t.Fatalf("command type = %T", cmd)
-	}
-
-	if connect.ChannelID != 0xff ||
-		connect.ReliableSequenceNumber != 3 ||
-		connect.OutgoingPeerID != 7 ||
-		connect.IncomingSessionID != 1 ||
-		connect.OutgoingSessionID != 2 ||
-		connect.MTU != 1400 ||
-		connect.WindowSize != 32768 ||
-		connect.ChannelCount != 2 ||
-		connect.IncomingBandwidth != 60000 ||
-		connect.OutgoingBandwidth != 30000 ||
-		connect.PacketThrottleInterval != 5000 ||
-		connect.PacketThrottleAcceleration != 2 ||
-		connect.PacketThrottleDeceleration != 3 ||
-		connect.ConnectID != 0xdeadbeef ||
-		connect.Data != 0x10203040 {
-		t.Fatalf("connect mismatch: %+v", connect)
-	}
-
-	if got := connect.MarshalBinary(nil); !bytes.Equal(got, wire) {
-		t.Fatalf("connect marshal mismatch: %x != %x", got, wire)
+	if got != header {
+		t.Fatalf("header mismatch: %+v != %+v", got, header)
 	}
 }
 
-func TestAcknowledgeCommandMatchesGolden(t *testing.T) {
-	// ack.bin is an ENetProtocolAcknowledge payload with:
-	// command=ACKNOWLEDGE, channelID=0x02, reliableSequenceNumber=5,
-	// receivedReliableSequenceNumber=4, receivedSentTime=1234.
-	wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", "ack.bin"))
-	if err != nil {
-		t.Fatal(err)
+func TestCommandMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		golden   string
+		flags    protocol.CommandFlag
+		want     protocol.PacketCommand
+		validate func(*testing.T, []byte)
+	}{
+		{
+			name:   "acknowledge",
+			golden: "ack.bin",
+			want: protocol.Acknowledge{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandAcknowledge,
+					ChannelID:              0x02,
+					ReliableSequenceNumber: 5,
+				},
+				ReceivedReliableSequenceNumber: 4,
+				ReceivedSentTime:               1234,
+			},
+		},
+		{
+			name:   "connect",
+			golden: "connect.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.Connect{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandConnect,
+					ChannelID:              0xff,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 3,
+				},
+				OutgoingPeerID:             7,
+				IncomingSessionID:          1,
+				OutgoingSessionID:          2,
+				MTU:                        1400,
+				WindowSize:                 32768,
+				ChannelCount:               2,
+				IncomingBandwidth:          60000,
+				OutgoingBandwidth:          30000,
+				PacketThrottleInterval:     5000,
+				PacketThrottleAcceleration: 2,
+				PacketThrottleDeceleration: 3,
+				ConnectID:                  0xdeadbeef,
+				Data:                       0x10203040,
+			},
+			validate: func(t *testing.T, wire []byte) {
+				t.Helper()
+				if got, want := wire[40:44], []byte{0xef, 0xbe, 0xad, 0xde}; !bytes.Equal(got, want) {
+					t.Fatalf("connectID bytes = %x, want %x", got, want)
+				}
+			},
+		},
+		{
+			name:   "verify connect",
+			golden: "verify_connect.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.VerifyConnect{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandVerifyConnect,
+					ChannelID:              0xff,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 9,
+				},
+				OutgoingPeerID:             33,
+				IncomingSessionID:          3,
+				OutgoingSessionID:          4,
+				MTU:                        1400,
+				WindowSize:                 32768,
+				ChannelCount:               2,
+				IncomingBandwidth:          60000,
+				OutgoingBandwidth:          30000,
+				PacketThrottleInterval:     5000,
+				PacketThrottleAcceleration: 2,
+				PacketThrottleDeceleration: 3,
+				ConnectID:                  0x12345678,
+			},
+		},
+		{
+			name:   "disconnect",
+			golden: "disconnect.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.Disconnect{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandDisconnect,
+					ChannelID:              0xff,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 11,
+				},
+				Data: 0xaabbccdd,
+			},
+		},
+		{
+			name:   "ping",
+			golden: "ping.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.Ping{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandPing,
+					ChannelID:              0xff,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 12,
+				},
+			},
+		},
+		{
+			name:   "send reliable",
+			golden: "send_reliable.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.SendReliable{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandSendReliable,
+					ChannelID:              0x02,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 13,
+				},
+				Data: []byte("hello"),
+			},
+		},
+		{
+			name:   "send unreliable",
+			golden: "send_unreliable.bin",
+			want: protocol.SendUnreliable{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandSendUnreliable,
+					ChannelID:              0x03,
+					ReliableSequenceNumber: 14,
+				},
+				UnreliableSequenceNumber: 4,
+				Data:                     []byte{0xde, 0xad, 0xbe, 0xef},
+			},
+		},
+		{
+			name:   "send fragment",
+			golden: "send_fragment.bin",
+			flags:  protocol.CommandFlagAcknowledge,
+			want: protocol.SendFragment{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandSendFragment,
+					ChannelID:              0x01,
+					Flags:                  protocol.CommandFlagAcknowledge,
+					ReliableSequenceNumber: 15,
+				},
+				StartSequenceNumber: 10,
+				FragmentCount:       4,
+				FragmentNumber:      2,
+				TotalLength:         10,
+				FragmentOffset:      6,
+				Data:                []byte("xyz"),
+			},
+		},
+		{
+			name:   "send unreliable fragment",
+			golden: "send_unreliable_fragment.bin",
+			want: protocol.SendFragment{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandSendUnreliableFragment,
+					ChannelID:              0x04,
+					ReliableSequenceNumber: 16,
+				},
+				StartSequenceNumber: 7,
+				FragmentCount:       3,
+				FragmentNumber:      1,
+				TotalLength:         12,
+				FragmentOffset:      4,
+				Data:                []byte("part"),
+			},
+		},
 	}
 
-	cmd, flags, n, err := protocol.ParseCommand(wire)
-	if err != nil {
-		t.Fatal(err)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			wire, err := os.ReadFile(filepath.Join("..", "..", "testdata", "protocol", tt.golden))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.validate != nil {
+				tt.validate(t, wire)
+			}
+
+			cmd, flags, n, err := protocol.ParseCommand(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if flags != tt.flags {
+				t.Fatalf("flags = 0x%02x, want 0x%02x", flags, tt.flags)
+			}
+			if n != len(wire) {
+				t.Fatalf("consumed = %d, want %d", n, len(wire))
+			}
+			if !reflect.DeepEqual(cmd, tt.want) {
+				t.Fatalf("command mismatch:\n got: %#v\nwant: %#v", cmd, tt.want)
+			}
+
+			if got := cmd.MarshalBinary(nil); !bytes.Equal(got, wire) {
+				t.Fatalf("marshal mismatch: %x != %x", got, wire)
+			}
+		})
 	}
-	if flags != 0 {
-		t.Fatalf("flags = 0x%02x, want 0x00", flags)
-	}
-	if n != len(wire) {
-		t.Fatalf("consumed = %d, want %d", n, len(wire))
+}
+
+func TestParseCommandRejectsTruncatedPayloads(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		wire []byte
+	}{
+		{name: "acknowledge", wire: []byte{0x01, 0x02, 0x00, 0x05, 0x00, 0x04, 0x04}},
+		{name: "connect", wire: []byte{0x82, 0xff, 0x00, 0x03}},
+		{name: "verify connect", wire: []byte{0x83, 0xff, 0x00, 0x09}},
+		{name: "disconnect", wire: []byte{0x84, 0xff, 0x00, 0x0b, 0xaa}},
+		{name: "send reliable", wire: []byte{0x86, 0x02, 0x00, 0x0d, 0x00}},
+		{name: "send unreliable", wire: []byte{0x07, 0x03, 0x00, 0x0e, 0x00, 0x04, 0x00}},
+		{name: "send fragment", wire: []byte{0x88, 0x01, 0x00, 0x0f, 0x00, 0x0a}},
+		{name: "send unreliable fragment", wire: []byte{0x0c, 0x04, 0x00, 0x10, 0x00, 0x07}},
 	}
 
-	ack, ok := cmd.(protocol.Acknowledge)
-	if !ok {
-		t.Fatalf("command type = %T", cmd)
-	}
-
-	if ack.ChannelID != 0x02 || ack.ReliableSequenceNumber != 5 || ack.ReceivedReliableSequenceNumber != 4 || ack.ReceivedSentTime != 1234 {
-		t.Fatalf("ack mismatch: %+v", ack)
-	}
-
-	if got := ack.MarshalBinary(nil); !bytes.Equal(got, wire) {
-		t.Fatalf("ack marshal mismatch: %x != %x", got, wire)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, _, err := protocol.ParseCommand(tt.wire); err == nil {
+				t.Fatal("ParseCommand succeeded on truncated input")
+			}
+		})
 	}
 }

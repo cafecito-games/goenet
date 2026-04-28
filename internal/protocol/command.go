@@ -10,18 +10,24 @@ type PacketCommand interface {
 	MarshalBinary(dst []byte) []byte
 }
 
+// CommandHeader preserves the common ENet command header plus packed command flags.
+type CommandHeader struct {
+	Command                Command
+	ChannelID              uint8
+	Flags                  CommandFlag
+	ReliableSequenceNumber uint16
+}
+
 // Acknowledge matches ENetProtocolAcknowledge.
 type Acknowledge struct {
-	ChannelID                      uint8
-	ReliableSequenceNumber         uint16
+	Header                         CommandHeader
 	ReceivedReliableSequenceNumber uint16
 	ReceivedSentTime               uint16
 }
 
 // Connect matches ENetProtocolConnect.
 type Connect struct {
-	ChannelID                  uint8
-	ReliableSequenceNumber     uint16
+	Header                     CommandHeader
 	OutgoingPeerID             uint16
 	IncomingSessionID          uint8
 	OutgoingSessionID          uint8
@@ -37,23 +43,100 @@ type Connect struct {
 	Data                       uint32
 }
 
-func (a Acknowledge) MarshalBinary(dst []byte) []byte {
+// VerifyConnect matches ENetProtocolVerifyConnect.
+type VerifyConnect struct {
+	Header                     CommandHeader
+	OutgoingPeerID             uint16
+	IncomingSessionID          uint8
+	OutgoingSessionID          uint8
+	MTU                        uint32
+	WindowSize                 uint32
+	ChannelCount               uint32
+	IncomingBandwidth          uint32
+	OutgoingBandwidth          uint32
+	PacketThrottleInterval     uint32
+	PacketThrottleAcceleration uint32
+	PacketThrottleDeceleration uint32
+	ConnectID                  uint32
+}
+
+// Disconnect matches ENetProtocolDisconnect.
+type Disconnect struct {
+	Header CommandHeader
+	Data   uint32
+}
+
+// Ping matches ENetProtocolPing.
+type Ping struct {
+	Header CommandHeader
+}
+
+// SendReliable matches ENetProtocolSendReliable.
+type SendReliable struct {
+	Header CommandHeader
+	Data   []byte
+}
+
+// SendUnreliable matches ENetProtocolSendUnreliable.
+type SendUnreliable struct {
+	Header                   CommandHeader
+	UnreliableSequenceNumber uint16
+	Data                     []byte
+}
+
+// SendFragment matches ENetProtocolSendFragment and ENetProtocolSendUnreliableFragment.
+type SendFragment struct {
+	Header              CommandHeader
+	StartSequenceNumber uint16
+	FragmentCount       uint32
+	FragmentNumber      uint32
+	TotalLength         uint32
+	FragmentOffset      uint32
+	Data                []byte
+}
+
+func (h CommandHeader) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
-	dst = append(dst, make([]byte, acknowledgeCommandSize)...)
-	dst[start] = byte(CommandAcknowledge)
-	dst[start+1] = a.ChannelID
-	binary.BigEndian.PutUint16(dst[start+2:start+4], a.ReliableSequenceNumber)
+	dst = append(dst, make([]byte, commandHeaderSize)...)
+	dst[start] = byte(h.Command) | byte(h.Flags)
+	dst[start+1] = h.ChannelID
+	binary.BigEndian.PutUint16(dst[start+2:start+4], h.ReliableSequenceNumber)
+	return dst
+}
+
+func ParseCommandHeader(src []byte) (CommandHeader, error) {
+	if len(src) < commandHeaderSize {
+		return CommandHeader{}, fmt.Errorf("protocol command too short: got %d bytes", len(src))
+	}
+
+	return CommandHeader{
+		Command:                Command(src[0] & byte(CommandMask)),
+		ChannelID:              src[1],
+		Flags:                  CommandFlag(src[0]) &^ CommandMask,
+		ReliableSequenceNumber: binary.BigEndian.Uint16(src[2:4]),
+	}, nil
+}
+
+func (a Acknowledge) MarshalBinary(dst []byte) []byte {
+	header := a.Header
+	header.Command = CommandAcknowledge
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, acknowledgeCommandSize-commandHeaderSize)...)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], a.ReceivedReliableSequenceNumber)
 	binary.BigEndian.PutUint16(dst[start+6:start+8], a.ReceivedSentTime)
 	return dst
 }
 
 func (c Connect) MarshalBinary(dst []byte) []byte {
+	header := c.Header
+	header.Command = CommandConnect
+	header.Flags |= CommandFlagAcknowledge
+
 	start := len(dst)
-	dst = append(dst, make([]byte, connectCommandSize)...)
-	dst[start] = byte(CommandConnect | Command(CommandFlagAcknowledge))
-	dst[start+1] = c.ChannelID
-	binary.BigEndian.PutUint16(dst[start+2:start+4], c.ReliableSequenceNumber)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, connectCommandSize-commandHeaderSize)...)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], c.OutgoingPeerID)
 	dst[start+6] = c.IncomingSessionID
 	dst[start+7] = c.OutgoingSessionID
@@ -71,46 +154,150 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
-func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
-	if len(src) < commandHeaderSize {
-		return nil, 0, 0, fmt.Errorf("protocol command too short: got %d bytes", len(src))
+func (c VerifyConnect) MarshalBinary(dst []byte) []byte {
+	header := c.Header
+	header.Command = CommandVerifyConnect
+	header.Flags |= CommandFlagAcknowledge
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, verifyConnectCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], c.OutgoingPeerID)
+	dst[start+6] = c.IncomingSessionID
+	dst[start+7] = c.OutgoingSessionID
+	binary.BigEndian.PutUint32(dst[start+8:start+12], c.MTU)
+	binary.BigEndian.PutUint32(dst[start+12:start+16], c.WindowSize)
+	binary.BigEndian.PutUint32(dst[start+16:start+20], c.ChannelCount)
+	binary.BigEndian.PutUint32(dst[start+20:start+24], c.IncomingBandwidth)
+	binary.BigEndian.PutUint32(dst[start+24:start+28], c.OutgoingBandwidth)
+	binary.BigEndian.PutUint32(dst[start+28:start+32], c.PacketThrottleInterval)
+	binary.BigEndian.PutUint32(dst[start+32:start+36], c.PacketThrottleAcceleration)
+	binary.BigEndian.PutUint32(dst[start+36:start+40], c.PacketThrottleDeceleration)
+	binary.LittleEndian.PutUint32(dst[start+40:start+44], c.ConnectID)
+	return dst
+}
+
+func (d Disconnect) MarshalBinary(dst []byte) []byte {
+	header := d.Header
+	header.Command = CommandDisconnect
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, disconnectCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint32(dst[start+4:start+8], d.Data)
+	return dst
+}
+
+func (p Ping) MarshalBinary(dst []byte) []byte {
+	header := p.Header
+	header.Command = CommandPing
+	header.Flags |= CommandFlagAcknowledge
+	return header.MarshalBinary(dst)
+}
+
+func (s SendReliable) MarshalBinary(dst []byte) []byte {
+	header := s.Header
+	header.Command = CommandSendReliable
+	header.Flags |= CommandFlagAcknowledge
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, sendReliableCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], uint16(len(s.Data)))
+	dst = append(dst, s.Data...)
+	return dst
+}
+
+func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
+	header := s.Header
+	header.Command = CommandSendUnreliable
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, sendUnreliableCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], s.UnreliableSequenceNumber)
+	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	dst = append(dst, s.Data...)
+	return dst
+}
+
+func (s SendFragment) MarshalBinary(dst []byte) []byte {
+	header := s.Header
+	if header.Command == 0 {
+		header.Command = CommandSendFragment
+	}
+	if header.Command == CommandSendFragment {
+		header.Flags |= CommandFlagAcknowledge
 	}
 
-	flags := CommandFlag(src[0]) &^ CommandMask
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, sendFragmentCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], s.StartSequenceNumber)
+	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	binary.BigEndian.PutUint32(dst[start+8:start+12], s.FragmentCount)
+	binary.BigEndian.PutUint32(dst[start+12:start+16], s.FragmentNumber)
+	binary.BigEndian.PutUint32(dst[start+16:start+20], s.TotalLength)
+	binary.BigEndian.PutUint32(dst[start+20:start+24], s.FragmentOffset)
+	dst = append(dst, s.Data...)
+	return dst
+}
 
-	switch Command(src[0] & byte(CommandMask)) {
+func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
+	header, err := ParseCommandHeader(src)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	switch header.Command {
 	case CommandAcknowledge:
-		cmd, n, err := parseAcknowledge(src)
-		return cmd, flags, n, err
+		cmd, n, err := parseAcknowledge(header, src)
+		return cmd, header.Flags, n, err
 	case CommandConnect:
-		cmd, n, err := parseConnect(src)
-		return cmd, flags, n, err
+		cmd, n, err := parseConnect(header, src)
+		return cmd, header.Flags, n, err
+	case CommandVerifyConnect:
+		cmd, n, err := parseVerifyConnect(header, src)
+		return cmd, header.Flags, n, err
+	case CommandDisconnect:
+		cmd, n, err := parseDisconnect(header, src)
+		return cmd, header.Flags, n, err
+	case CommandPing:
+		cmd, n, err := parsePing(header, src)
+		return cmd, header.Flags, n, err
+	case CommandSendReliable:
+		cmd, n, err := parseSendReliable(header, src)
+		return cmd, header.Flags, n, err
+	case CommandSendUnreliable:
+		cmd, n, err := parseSendUnreliable(header, src)
+		return cmd, header.Flags, n, err
+	case CommandSendFragment, CommandSendUnreliableFragment:
+		cmd, n, err := parseSendFragment(header, src)
+		return cmd, header.Flags, n, err
 	default:
 		return nil, 0, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
 	}
 }
 
-func parseAcknowledge(src []byte) (Acknowledge, int, error) {
+func parseAcknowledge(header CommandHeader, src []byte) (Acknowledge, int, error) {
 	if len(src) < acknowledgeCommandSize {
 		return Acknowledge{}, 0, fmt.Errorf("acknowledge command too short: got %d bytes", len(src))
 	}
 
 	return Acknowledge{
-		ChannelID:                      src[1],
-		ReliableSequenceNumber:         binary.BigEndian.Uint16(src[2:4]),
+		Header:                         header,
 		ReceivedReliableSequenceNumber: binary.BigEndian.Uint16(src[4:6]),
 		ReceivedSentTime:               binary.BigEndian.Uint16(src[6:8]),
 	}, acknowledgeCommandSize, nil
 }
 
-func parseConnect(src []byte) (Connect, int, error) {
+func parseConnect(header CommandHeader, src []byte) (Connect, int, error) {
 	if len(src) < connectCommandSize {
 		return Connect{}, 0, fmt.Errorf("connect command too short: got %d bytes", len(src))
 	}
 
 	return Connect{
-		ChannelID:                  src[1],
-		ReliableSequenceNumber:     binary.BigEndian.Uint16(src[2:4]),
+		Header:                     header,
 		OutgoingPeerID:             binary.BigEndian.Uint16(src[4:6]),
 		IncomingSessionID:          src[6],
 		OutgoingSessionID:          src[7],
@@ -125,4 +312,99 @@ func parseConnect(src []byte) (Connect, int, error) {
 		ConnectID:                  binary.LittleEndian.Uint32(src[40:44]),
 		Data:                       binary.BigEndian.Uint32(src[44:48]),
 	}, connectCommandSize, nil
+}
+
+func parseVerifyConnect(header CommandHeader, src []byte) (VerifyConnect, int, error) {
+	if len(src) < verifyConnectCommandSize {
+		return VerifyConnect{}, 0, fmt.Errorf("verify connect command too short: got %d bytes", len(src))
+	}
+
+	return VerifyConnect{
+		Header:                     header,
+		OutgoingPeerID:             binary.BigEndian.Uint16(src[4:6]),
+		IncomingSessionID:          src[6],
+		OutgoingSessionID:          src[7],
+		MTU:                        binary.BigEndian.Uint32(src[8:12]),
+		WindowSize:                 binary.BigEndian.Uint32(src[12:16]),
+		ChannelCount:               binary.BigEndian.Uint32(src[16:20]),
+		IncomingBandwidth:          binary.BigEndian.Uint32(src[20:24]),
+		OutgoingBandwidth:          binary.BigEndian.Uint32(src[24:28]),
+		PacketThrottleInterval:     binary.BigEndian.Uint32(src[28:32]),
+		PacketThrottleAcceleration: binary.BigEndian.Uint32(src[32:36]),
+		PacketThrottleDeceleration: binary.BigEndian.Uint32(src[36:40]),
+		ConnectID:                  binary.LittleEndian.Uint32(src[40:44]),
+	}, verifyConnectCommandSize, nil
+}
+
+func parseDisconnect(header CommandHeader, src []byte) (Disconnect, int, error) {
+	if len(src) < disconnectCommandSize {
+		return Disconnect{}, 0, fmt.Errorf("disconnect command too short: got %d bytes", len(src))
+	}
+
+	return Disconnect{
+		Header: header,
+		Data:   binary.BigEndian.Uint32(src[4:8]),
+	}, disconnectCommandSize, nil
+}
+
+func parsePing(header CommandHeader, src []byte) (Ping, int, error) {
+	if len(src) < pingCommandSize {
+		return Ping{}, 0, fmt.Errorf("ping command too short: got %d bytes", len(src))
+	}
+
+	return Ping{Header: header}, pingCommandSize, nil
+}
+
+func parseSendReliable(header CommandHeader, src []byte) (SendReliable, int, error) {
+	if len(src) < sendReliableCommandSize {
+		return SendReliable{}, 0, fmt.Errorf("send reliable command too short: got %d bytes", len(src))
+	}
+
+	dataLength := int(binary.BigEndian.Uint16(src[4:6]))
+	if len(src) < sendReliableCommandSize+dataLength {
+		return SendReliable{}, 0, fmt.Errorf("send reliable payload too short: got %d bytes", len(src))
+	}
+
+	return SendReliable{
+		Header: header,
+		Data:   append([]byte(nil), src[6:6+dataLength]...),
+	}, sendReliableCommandSize + dataLength, nil
+}
+
+func parseSendUnreliable(header CommandHeader, src []byte) (SendUnreliable, int, error) {
+	if len(src) < sendUnreliableCommandSize {
+		return SendUnreliable{}, 0, fmt.Errorf("send unreliable command too short: got %d bytes", len(src))
+	}
+
+	dataLength := int(binary.BigEndian.Uint16(src[6:8]))
+	if len(src) < sendUnreliableCommandSize+dataLength {
+		return SendUnreliable{}, 0, fmt.Errorf("send unreliable payload too short: got %d bytes", len(src))
+	}
+
+	return SendUnreliable{
+		Header:                   header,
+		UnreliableSequenceNumber: binary.BigEndian.Uint16(src[4:6]),
+		Data:                     append([]byte(nil), src[8:8+dataLength]...),
+	}, sendUnreliableCommandSize + dataLength, nil
+}
+
+func parseSendFragment(header CommandHeader, src []byte) (SendFragment, int, error) {
+	if len(src) < sendFragmentCommandSize {
+		return SendFragment{}, 0, fmt.Errorf("send fragment command too short: got %d bytes", len(src))
+	}
+
+	dataLength := int(binary.BigEndian.Uint16(src[6:8]))
+	if len(src) < sendFragmentCommandSize+dataLength {
+		return SendFragment{}, 0, fmt.Errorf("send fragment payload too short: got %d bytes", len(src))
+	}
+
+	return SendFragment{
+		Header:              header,
+		StartSequenceNumber: binary.BigEndian.Uint16(src[4:6]),
+		FragmentCount:       binary.BigEndian.Uint32(src[8:12]),
+		FragmentNumber:      binary.BigEndian.Uint32(src[12:16]),
+		TotalLength:         binary.BigEndian.Uint32(src[16:20]),
+		FragmentOffset:      binary.BigEndian.Uint32(src[20:24]),
+		Data:                append([]byte(nil), src[24:24+dataLength]...),
+	}, sendFragmentCommandSize + dataLength, nil
 }

@@ -34,4 +34,13 @@ func TestProtocolConstantsMatchENet(t *testing.T) {
 	if protocol.CommandSendReliable != 6 {
 		t.Fatalf("CommandSendReliable = %d", protocol.CommandSendReliable)
 	}
+	if protocol.CommandSendUnreliable != 7 {
+		t.Fatalf("CommandSendUnreliable = %d", protocol.CommandSendUnreliable)
+	}
+	if protocol.CommandSendFragment != 8 {
+		t.Fatalf("CommandSendFragment = %d", protocol.CommandSendFragment)
+	}
+	if protocol.CommandSendUnreliableFragment != 12 {
+		t.Fatalf("CommandSendUnreliableFragment = %d", protocol.CommandSendUnreliableFragment)
+	}
 }

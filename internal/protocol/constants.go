@@ -30,17 +30,23 @@ const (
 	CommandSendUnreliableFragment Command = 12
 	CommandCount                  Command = 13
 
-	CommandMask            CommandFlag = 0x0F
-	CommandFlagUnsequenced CommandFlag = 1 << 6
-	CommandFlagAcknowledge CommandFlag = 1 << 7
-	HeaderFlagCompressed   HeaderFlag  = 1 << 14
-	HeaderFlagSentTime     HeaderFlag  = 1 << 15
-	HeaderFlagMask         HeaderFlag  = HeaderFlagCompressed | HeaderFlagSentTime
-	HeaderSessionMask      uint16      = 3 << 12
-	HeaderSessionShift                 = 12
-	headerMinimalSize                  = 2
-	headerSize                         = 4
-	commandHeaderSize                  = 4
-	acknowledgeCommandSize             = 8
-	connectCommandSize                 = 48
+	CommandMask               CommandFlag = 0x0F
+	CommandFlagUnsequenced    CommandFlag = 1 << 6
+	CommandFlagAcknowledge    CommandFlag = 1 << 7
+	HeaderFlagCompressed      HeaderFlag  = 1 << 14
+	HeaderFlagSentTime        HeaderFlag  = 1 << 15
+	HeaderFlagMask            HeaderFlag  = HeaderFlagCompressed | HeaderFlagSentTime
+	HeaderSessionMask         uint16      = 3 << 12
+	HeaderSessionShift                    = 12
+	headerMinimalSize                     = 2
+	headerSize                            = 4
+	commandHeaderSize                     = 4
+	acknowledgeCommandSize                = 8
+	connectCommandSize                    = 48
+	verifyConnectCommandSize              = 44
+	disconnectCommandSize                 = 8
+	pingCommandSize                       = 4
+	sendReliableCommandSize               = 6
+	sendUnreliableCommandSize             = 8
+	sendFragmentCommandSize               = 24
 )
