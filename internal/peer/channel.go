@@ -19,27 +19,30 @@ func NewChannel() Channel {
 	return Channel{}
 }
 
-// QueueIncomingReliable inserts a reliable receive command in ENet sequence order.
-func (ch *Channel) QueueIncomingReliable(cmd *IncomingCommand) *listElement[*IncomingCommand] {
+// InsertIncomingReliableOrdered only maintains ENet receive ordering.
+// Duplicate, stale, and window validation stay in the engine receive path.
+func (ch *Channel) InsertIncomingReliableOrdered(cmd *IncomingCommand) *listElement[*IncomingCommand] {
 	return ch.IncomingReliableCommands.InsertOrdered(cmd, func(a, b *IncomingCommand) bool {
 		return incomingReliableLess(ch.IncomingReliableSequenceNumber, a, b)
 	})
 }
 
-// QueueIncomingUnreliable inserts an unreliable receive command in ENet queue order.
-func (ch *Channel) QueueIncomingUnreliable(cmd *IncomingCommand) *listElement[*IncomingCommand] {
+// InsertIncomingUnreliableOrdered only maintains ENet receive ordering.
+// Duplicate, stale, and window validation stay in the engine receive path.
+func (ch *Channel) InsertIncomingUnreliableOrdered(cmd *IncomingCommand) *listElement[*IncomingCommand] {
 	return ch.IncomingUnreliableCommands.InsertOrdered(cmd, func(a, b *IncomingCommand) bool {
 		return incomingUnreliableLess(ch.IncomingReliableSequenceNumber, a, b)
 	})
 }
 
 // MarkIncomingReliableDispatched advances the receive anchor after reliable delivery.
+// Fragment trains consume the full reliable sequence span once reassembly completes.
 func (ch *Channel) MarkIncomingReliableDispatched(cmd *IncomingCommand) {
 	if cmd == nil {
 		return
 	}
 
-	ch.IncomingReliableSequenceNumber = cmd.ReliableSequenceNumber
+	ch.IncomingReliableSequenceNumber = reliableDispatchAnchor(cmd)
 	ch.IncomingUnreliableSequenceNumber = 0
 }
 
@@ -73,4 +76,15 @@ func sequenceDistance(anchor, sequence uint16) uint32 {
 	}
 
 	return uint32(sequence) + (1 << 16) - uint32(anchor)
+}
+
+func reliableDispatchAnchor(cmd *IncomingCommand) uint16 {
+	if cmd == nil {
+		return 0
+	}
+	if cmd.FragmentCount <= 1 {
+		return cmd.ReliableSequenceNumber
+	}
+
+	return cmd.ReliableSequenceNumber + uint16(cmd.FragmentCount-1)
 }

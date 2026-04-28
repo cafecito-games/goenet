@@ -9,8 +9,8 @@ func TestChannelQueuesIncomingReliableAroundCurrentSequenceAnchor(t *testing.T) 
 	wrapped := &IncomingCommand{ReliableSequenceNumber: 1}
 	currentWindow := &IncomingCommand{ReliableSequenceNumber: 0xFFF2}
 
-	ch.QueueIncomingReliable(wrapped)
-	ch.QueueIncomingReliable(currentWindow)
+	ch.InsertIncomingReliableOrdered(wrapped)
+	ch.InsertIncomingReliableOrdered(currentWindow)
 
 	want := []*IncomingCommand{currentWindow, wrapped}
 	index := 0
@@ -33,9 +33,9 @@ func TestChannelQueuesIncomingUnreliableByReliableThenUnreliableSequence(t *test
 	higherUnreliable := &IncomingCommand{ReliableSequenceNumber: 11, UnreliableSequenceNumber: 3}
 	lowerUnreliable := &IncomingCommand{ReliableSequenceNumber: 11, UnreliableSequenceNumber: 1}
 
-	ch.QueueIncomingUnreliable(nextReliable)
-	ch.QueueIncomingUnreliable(higherUnreliable)
-	ch.QueueIncomingUnreliable(lowerUnreliable)
+	ch.InsertIncomingUnreliableOrdered(nextReliable)
+	ch.InsertIncomingUnreliableOrdered(higherUnreliable)
+	ch.InsertIncomingUnreliableOrdered(lowerUnreliable)
 
 	want := []*IncomingCommand{lowerUnreliable, higherUnreliable, nextReliable}
 	index := 0
@@ -55,6 +55,10 @@ func TestChannelDispatchSequenceHelpersAdvanceENetReceiveAnchors(t *testing.T) {
 
 	reliable := &IncomingCommand{ReliableSequenceNumber: 22}
 	unreliable := &IncomingCommand{ReliableSequenceNumber: 22, UnreliableSequenceNumber: 7}
+	reliableFragments := &IncomingCommand{
+		ReliableSequenceNumber: 100,
+		FragmentCount:          3,
+	}
 
 	ch.MarkIncomingReliableDispatched(reliable)
 	if ch.IncomingReliableSequenceNumber != 22 {
@@ -64,11 +68,36 @@ func TestChannelDispatchSequenceHelpersAdvanceENetReceiveAnchors(t *testing.T) {
 		t.Fatalf("IncomingUnreliableSequenceNumber = %d", ch.IncomingUnreliableSequenceNumber)
 	}
 
+	ch.MarkIncomingReliableDispatched(reliableFragments)
+	if ch.IncomingReliableSequenceNumber != 102 {
+		t.Fatalf("IncomingReliableSequenceNumber after fragments = %d", ch.IncomingReliableSequenceNumber)
+	}
+	if ch.IncomingUnreliableSequenceNumber != 0 {
+		t.Fatalf("IncomingUnreliableSequenceNumber after fragments = %d", ch.IncomingUnreliableSequenceNumber)
+	}
+
 	ch.MarkIncomingUnreliableDispatched(unreliable)
 	if ch.IncomingReliableSequenceNumber != 22 {
 		t.Fatalf("IncomingReliableSequenceNumber = %d", ch.IncomingReliableSequenceNumber)
 	}
 	if ch.IncomingUnreliableSequenceNumber != 7 {
+		t.Fatalf("IncomingUnreliableSequenceNumber = %d", ch.IncomingUnreliableSequenceNumber)
+	}
+}
+
+func TestChannelDispatchSequenceHelpersWrapReliableFragmentRange(t *testing.T) {
+	ch := NewChannel()
+
+	reliableFragments := &IncomingCommand{
+		ReliableSequenceNumber: 0xFFFE,
+		FragmentCount:          3,
+	}
+
+	ch.MarkIncomingReliableDispatched(reliableFragments)
+	if ch.IncomingReliableSequenceNumber != 0 {
+		t.Fatalf("IncomingReliableSequenceNumber = %d, want 0", ch.IncomingReliableSequenceNumber)
+	}
+	if ch.IncomingUnreliableSequenceNumber != 0 {
 		t.Fatalf("IncomingUnreliableSequenceNumber = %d", ch.IncomingUnreliableSequenceNumber)
 	}
 }
