@@ -18,6 +18,33 @@ type Peer struct {
 	Channels                       []Channel
 	IncomingBandwidth              uint32
 	OutgoingBandwidth              uint32
+	IncomingDataTotal              uint32
+	OutgoingDataTotal              uint32
+	IncomingBandwidthThrottleEpoch uint32
+	OutgoingBandwidthThrottleEpoch uint32
+	LastSendTime                   uint32
+	LastReceiveTime                uint32
+	NextTimeout                    uint32
+	EarliestTimeout                uint32
+	PacketsLost                    uint32
+	TotalPacketsLost               uint32
+	PacketThrottle                 uint32
+	PacketThrottleLimit            uint32
+	PacketThrottleCounter          uint32
+	PacketThrottleEpoch            uint32
+	PacketThrottleAcceleration     uint32
+	PacketThrottleDeceleration     uint32
+	PacketThrottleInterval         uint32
+	TimeoutLimit                   uint32
+	TimeoutMinimum                 uint32
+	TimeoutMaximum                 uint32
+	LastRoundTripTime              uint32
+	LowestRoundTripTime            uint32
+	LastRoundTripTimeVariance      uint32
+	HighestRoundTripTimeVariance   uint32
+	RoundTripTime                  uint32
+	RoundTripTimeVariance          uint32
+	ReliableDataInTransit          uint32
 	Acknowledgements               acknowledgementQueue
 	OutgoingCommands               outgoingQueue
 	OutgoingSendReliableCommands   outgoingQueue

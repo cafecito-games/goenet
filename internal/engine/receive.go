@@ -10,20 +10,18 @@ import (
 	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
+	"github.com/cafecito-games/goenet/internal/timeutil"
 )
 
 const (
-	protocolMaximumPeerID                    = protocol.MaximumPeerID
-	peerReliableWindows                      = 16
-	peerReliableWindowSize                   = 0x1000
-	peerFreeReliableWindows                  = 8
-	peerUnsequencedWindows                   = 64
-	peerUnsequencedWindowSize                = 1024
-	peerFreeUnsequencedWindows               = 32
-	protocolMaximumFragmentCount      uint32 = 1024 * 1024
-	defaultPacketThrottleInterval     uint32 = 5000
-	defaultPacketThrottleAcceleration        = 2
-	defaultPacketThrottleDeceleration        = 2
+	protocolMaximumPeerID               = protocol.MaximumPeerID
+	peerReliableWindows                 = 16
+	peerReliableWindowSize              = 0x1000
+	peerFreeReliableWindows             = 8
+	peerUnsequencedWindows              = 64
+	peerUnsequencedWindowSize           = 1024
+	peerFreeUnsequencedWindows          = 32
+	protocolMaximumFragmentCount uint32 = 1024 * 1024
 )
 
 type inboundDisposition uint8
@@ -43,19 +41,13 @@ type Event struct {
 }
 
 type peerRuntime struct {
-	eventData                  uint32
-	windowSize                 uint32
-	packetThrottleInterval     uint32
-	packetThrottleAcceleration uint32
-	packetThrottleDeceleration uint32
+	eventData  uint32
+	windowSize uint32
 }
 
 func defaultPeerRuntime() *peerRuntime {
 	return &peerRuntime{
-		windowSize:                 protocol.MaximumWindowSize,
-		packetThrottleInterval:     defaultPacketThrottleInterval,
-		packetThrottleAcceleration: defaultPacketThrottleAcceleration,
-		packetThrottleDeceleration: defaultPacketThrottleDeceleration,
+		windowSize: protocol.MaximumWindowSize,
 	}
 }
 
@@ -66,6 +58,12 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 		return event, nil
 	}
 	if event, ok := h.dispatchEvent(); ok {
+		return event, nil
+	}
+	if timeutil.Difference(h.serviceTime, h.bandwidthThrottleEpoch) >= defaultBandwidthThrottleInterval {
+		h.bandwidthThrottle()
+	}
+	if event, ok := h.checkTimeouts(); ok {
 		return event, nil
 	}
 	if err := h.Flush(ctx); err != nil {
@@ -146,6 +144,9 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 	currentPeer, ok := h.lookupPeer(header, addr)
 	if !ok {
 		return nil
+	}
+	if currentPeer != nil {
+		currentPeer.IncomingDataTotal += uint32(len(payload))
 	}
 
 	workingPayload := payload
@@ -366,10 +367,10 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 
 	runtime := h.runtime[selected]
 	runtime.eventData = command.Data
-	runtime.packetThrottleInterval = command.PacketThrottleInterval
-	runtime.packetThrottleAcceleration = command.PacketThrottleAcceleration
-	runtime.packetThrottleDeceleration = command.PacketThrottleDeceleration
 	runtime.windowSize = clampUint32(command.WindowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+	selected.PacketThrottleInterval = command.PacketThrottleInterval
+	selected.PacketThrottleAcceleration = command.PacketThrottleAcceleration
+	selected.PacketThrottleDeceleration = command.PacketThrottleDeceleration
 
 	verify := protocol.VerifyConnect{
 		Header: protocol.CommandHeader{
@@ -383,9 +384,9 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 		ChannelCount:               channelCount,
 		IncomingBandwidth:          0,
 		OutgoingBandwidth:          0,
-		PacketThrottleInterval:     runtime.packetThrottleInterval,
-		PacketThrottleAcceleration: runtime.packetThrottleAcceleration,
-		PacketThrottleDeceleration: runtime.packetThrottleDeceleration,
+		PacketThrottleInterval:     selected.PacketThrottleInterval,
+		PacketThrottleAcceleration: selected.PacketThrottleAcceleration,
+		PacketThrottleDeceleration: selected.PacketThrottleDeceleration,
 		ConnectID:                  selected.ConnectID,
 	}
 	if err := h.queueOutgoingControlCommand(selected, peer.Command{
@@ -413,9 +414,9 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 		h.enqueuePeerDispatch(p)
 		return inboundReject
 	}
-	if command.PacketThrottleInterval != runtime.packetThrottleInterval ||
-		command.PacketThrottleAcceleration != runtime.packetThrottleAcceleration ||
-		command.PacketThrottleDeceleration != runtime.packetThrottleDeceleration ||
+	if command.PacketThrottleInterval != p.PacketThrottleInterval ||
+		command.PacketThrottleAcceleration != p.PacketThrottleAcceleration ||
+		command.PacketThrottleDeceleration != p.PacketThrottleDeceleration ||
 		command.ConnectID != p.ConnectID {
 		p.State = goenet.PeerStateZombie
 		h.enqueuePeerDispatch(p)
@@ -443,6 +444,49 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 	if p.State == goenet.PeerStateDisconnected || p.State == goenet.PeerStateZombie {
 		return true
 	}
+
+	receivedSentTime := uint32(command.ReceivedSentTime) | (h.serviceTime & 0xFFFF0000)
+	if (receivedSentTime & 0x8000) > (h.serviceTime & 0x8000) {
+		receivedSentTime -= 0x10000
+	}
+	if timeutil.Less(h.serviceTime, receivedSentTime) {
+		return false
+	}
+
+	roundTripTime := maxUint32(timeutil.Difference(h.serviceTime, receivedSentTime), 1)
+	if p.LastReceiveTime > 0 {
+		peerThrottle(p, roundTripTime)
+		p.RoundTripTimeVariance -= p.RoundTripTimeVariance / 4
+		if roundTripTime >= p.RoundTripTime {
+			diff := roundTripTime - p.RoundTripTime
+			p.RoundTripTimeVariance += diff / 4
+			p.RoundTripTime += diff / 8
+		} else {
+			diff := p.RoundTripTime - roundTripTime
+			p.RoundTripTimeVariance += diff / 4
+			p.RoundTripTime -= diff / 8
+		}
+	} else {
+		p.RoundTripTime = roundTripTime
+		p.RoundTripTimeVariance = (roundTripTime + 1) / 2
+	}
+
+	if p.RoundTripTime < p.LowestRoundTripTime {
+		p.LowestRoundTripTime = p.RoundTripTime
+	}
+	if p.RoundTripTimeVariance > p.HighestRoundTripTimeVariance {
+		p.HighestRoundTripTimeVariance = p.RoundTripTimeVariance
+	}
+	if p.PacketThrottleEpoch == 0 || timeutil.Difference(h.serviceTime, p.PacketThrottleEpoch) >= p.PacketThrottleInterval {
+		p.LastRoundTripTime = p.LowestRoundTripTime
+		p.LastRoundTripTimeVariance = maxUint32(p.HighestRoundTripTimeVariance, 1)
+		p.LowestRoundTripTime = p.RoundTripTime
+		p.HighestRoundTripTimeVariance = p.RoundTripTimeVariance
+		p.PacketThrottleEpoch = h.serviceTime
+	}
+
+	p.LastReceiveTime = maxUint32(h.serviceTime, 1)
+	p.EarliestTimeout = 0
 
 	commandNumber := h.removeSentReliableCommand(p, command.ReceivedReliableSequenceNumber, command.Header.ChannelID)
 	if p.State == goenet.PeerStateAcknowledgingConnect {
@@ -726,10 +770,9 @@ func (h *Host) handleThrottleConfigure(p *peer.Peer, command protocol.ThrottleCo
 	if p.State != goenet.PeerStateConnected && p.State != goenet.PeerStateDisconnectLater {
 		return false
 	}
-	runtime := h.runtime[p]
-	runtime.packetThrottleInterval = command.PacketThrottleInterval
-	runtime.packetThrottleAcceleration = command.PacketThrottleAcceleration
-	runtime.packetThrottleDeceleration = command.PacketThrottleDeceleration
+	p.PacketThrottleInterval = command.PacketThrottleInterval
+	p.PacketThrottleAcceleration = command.PacketThrottleAcceleration
+	p.PacketThrottleDeceleration = command.PacketThrottleDeceleration
 	return true
 }
 
@@ -958,6 +1001,33 @@ func (h *Host) clearPeerQueues(p *peer.Peer) {
 	address := p.Address
 	incomingBandwidth := p.IncomingBandwidth
 	outgoingBandwidth := p.OutgoingBandwidth
+	incomingDataTotal := p.IncomingDataTotal
+	outgoingDataTotal := p.OutgoingDataTotal
+	incomingBandwidthThrottleEpoch := p.IncomingBandwidthThrottleEpoch
+	outgoingBandwidthThrottleEpoch := p.OutgoingBandwidthThrottleEpoch
+	lastSendTime := p.LastSendTime
+	lastReceiveTime := p.LastReceiveTime
+	nextTimeout := p.NextTimeout
+	earliestTimeout := p.EarliestTimeout
+	packetsLost := p.PacketsLost
+	totalPacketsLost := p.TotalPacketsLost
+	packetThrottle := p.PacketThrottle
+	packetThrottleLimit := p.PacketThrottleLimit
+	packetThrottleCounter := p.PacketThrottleCounter
+	packetThrottleEpoch := p.PacketThrottleEpoch
+	packetThrottleAcceleration := p.PacketThrottleAcceleration
+	packetThrottleDeceleration := p.PacketThrottleDeceleration
+	packetThrottleInterval := p.PacketThrottleInterval
+	timeoutLimit := p.TimeoutLimit
+	timeoutMinimum := p.TimeoutMinimum
+	timeoutMaximum := p.TimeoutMaximum
+	lastRoundTripTime := p.LastRoundTripTime
+	lowestRoundTripTime := p.LowestRoundTripTime
+	lastRoundTripTimeVariance := p.LastRoundTripTimeVariance
+	highestRoundTripTimeVariance := p.HighestRoundTripTimeVariance
+	roundTripTime := p.RoundTripTime
+	roundTripTimeVariance := p.RoundTripTimeVariance
+	reliableDataInTransit := p.ReliableDataInTransit
 	outgoingReliableSequenceNumber := p.OutgoingReliableSequenceNumber
 	incomingUnsequencedGroup := p.IncomingUnsequencedGroup
 	unsequencedWindow := p.UnsequencedWindow
@@ -975,6 +1045,33 @@ func (h *Host) clearPeerQueues(p *peer.Peer) {
 		State:                          state,
 		IncomingBandwidth:              incomingBandwidth,
 		OutgoingBandwidth:              outgoingBandwidth,
+		IncomingDataTotal:              incomingDataTotal,
+		OutgoingDataTotal:              outgoingDataTotal,
+		IncomingBandwidthThrottleEpoch: incomingBandwidthThrottleEpoch,
+		OutgoingBandwidthThrottleEpoch: outgoingBandwidthThrottleEpoch,
+		LastSendTime:                   lastSendTime,
+		LastReceiveTime:                lastReceiveTime,
+		NextTimeout:                    nextTimeout,
+		EarliestTimeout:                earliestTimeout,
+		PacketsLost:                    packetsLost,
+		TotalPacketsLost:               totalPacketsLost,
+		PacketThrottle:                 packetThrottle,
+		PacketThrottleLimit:            packetThrottleLimit,
+		PacketThrottleCounter:          packetThrottleCounter,
+		PacketThrottleEpoch:            packetThrottleEpoch,
+		PacketThrottleAcceleration:     packetThrottleAcceleration,
+		PacketThrottleDeceleration:     packetThrottleDeceleration,
+		PacketThrottleInterval:         packetThrottleInterval,
+		TimeoutLimit:                   timeoutLimit,
+		TimeoutMinimum:                 timeoutMinimum,
+		TimeoutMaximum:                 timeoutMaximum,
+		LastRoundTripTime:              lastRoundTripTime,
+		LowestRoundTripTime:            lowestRoundTripTime,
+		LastRoundTripTimeVariance:      lastRoundTripTimeVariance,
+		HighestRoundTripTimeVariance:   highestRoundTripTimeVariance,
+		RoundTripTime:                  roundTripTime,
+		RoundTripTimeVariance:          roundTripTimeVariance,
+		ReliableDataInTransit:          reliableDataInTransit,
 		IncomingUnsequencedGroup:       incomingUnsequencedGroup,
 		UnsequencedWindow:              unsequencedWindow,
 	}
@@ -985,15 +1082,8 @@ func (h *Host) resetPeer(p *peer.Peer) {
 	connectID := p.ConnectID
 
 	h.removePeerDispatch(p)
-	*p = peer.Peer{
-		OutgoingPeerID:    protocolMaximumPeerID,
-		IncomingPeerID:    incomingPeerID,
-		ConnectID:         connectID,
-		OutgoingSessionID: 0xFF,
-		IncomingSessionID: 0xFF,
-		MTU:               h.config.MTU,
-		State:             goenet.PeerStateDisconnected,
-	}
+	h.initializePeer(p, int(incomingPeerID), goenet.Address{}, goenet.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
+	p.ConnectID = connectID
 	h.runtime[p] = defaultPeerRuntime()
 }
 
@@ -1039,10 +1129,39 @@ func (h *Host) removeSentReliableCommand(p *peer.Peer, reliableSequenceNumber ui
 			continue
 		}
 		p.SentReliableCommands.Remove(elem)
+		if cmd.Packet != nil {
+			if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
+				p.ReliableDataInTransit = 0
+			} else {
+				p.ReliableDataInTransit -= uint32(cmd.FragmentLength)
+			}
+		}
+		h.updateNextTimeout(p)
 		return cmd.Command.Header.Command
 	}
 
 	return protocol.CommandNone
+}
+
+func peerThrottle(p *peer.Peer, roundTripTime uint32) int {
+	if p.LastRoundTripTime <= p.LastRoundTripTimeVariance {
+		p.PacketThrottle = p.PacketThrottleLimit
+	} else if roundTripTime <= p.LastRoundTripTime {
+		p.PacketThrottle += p.PacketThrottleAcceleration
+		if p.PacketThrottle > p.PacketThrottleLimit {
+			p.PacketThrottle = p.PacketThrottleLimit
+		}
+		return 1
+	} else if roundTripTime > p.LastRoundTripTime+2*p.LastRoundTripTimeVariance {
+		if p.PacketThrottle > p.PacketThrottleDeceleration {
+			p.PacketThrottle -= p.PacketThrottleDeceleration
+		} else {
+			p.PacketThrottle = 0
+		}
+		return -1
+	}
+
+	return 0
 }
 
 func (h *Host) findReliableFragmentCommand(channel *peer.Channel, startSequence uint16) *peer.IncomingCommand {
@@ -1143,6 +1262,13 @@ func clampUint32(value, minimum, maximum uint32) uint32 {
 
 func minUint32(a, b uint32) uint32 {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxUint32(a, b uint32) uint32 {
+	if a > b {
 		return a
 	}
 	return b

@@ -238,6 +238,8 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 }
 
 func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
+	p.OutgoingDataTotal += uint32(len(datagram.payload))
+
 	for _, item := range datagram.selected {
 		if item.ack != nil {
 			front := p.Acknowledgements.Front()
@@ -258,7 +260,14 @@ func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 			continue
 		}
 
-		markCommandInFlight(cmd, h.serviceTime)
+		wasEmpty := p.SentReliableCommands.Len() == 0
+		markCommandInFlight(p, cmd, h.serviceTime)
+		if cmd.Packet != nil {
+			p.ReliableDataInTransit += uint32(cmd.FragmentLength)
+		}
+		if wasEmpty {
+			p.NextTimeout = h.serviceTime + cmd.RoundTripTimeout
+		}
 		p.SentReliableCommands.PushBack(cmd)
 	}
 }
@@ -279,11 +288,11 @@ func removeCommittedCommand(p *peer.Peer, item outgoingSelection) *peer.Outgoing
 	return p.OutgoingCommands.Remove(front)
 }
 
-func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {
+func markCommandInFlight(p *peer.Peer, cmd *peer.OutgoingCommand, serviceTime uint32) {
 	cmd.SendAttempts++
 	cmd.SentTime = serviceTime
 	if cmd.RoundTripTimeout == 0 {
-		cmd.RoundTripTimeout = defaultRoundTripTimeout
+		cmd.RoundTripTimeout = p.RoundTripTime + 4*p.RoundTripTimeVariance
 	}
 }
 
