@@ -197,6 +197,58 @@ func TestFlushMovesReliableCommandsInFlightWithWireMetadata(t *testing.T) {
 	}
 }
 
+func TestFlushMovesAckCommandFromGeneralQueueInFlightWithWireMetadata(t *testing.T) {
+	host, sock := newTestHost(t)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	queueGeneralCommand(host, peer.Raw, protocolCommand{
+		command:                iprotocol.CommandPing,
+		flags:                  iprotocol.CommandFlagAcknowledge,
+		channelID:              0xff,
+		reliableSequenceNumber: 9,
+	})
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.InFlightReliableCount(); got != 1 {
+		t.Fatalf("InFlightReliableCount = %d", got)
+	}
+
+	cmd := peer.mustInFlightReliable(t)
+	if cmd.Command.Header.Command != iprotocol.CommandPing {
+		t.Fatalf("command = %v", cmd.Command.Header.Command)
+	}
+	if cmd.Command.Header.Flags != iprotocol.CommandFlagAcknowledge {
+		t.Fatalf("flags = 0x%02x", cmd.Command.Header.Flags)
+	}
+	if cmd.SendAttempts != 1 {
+		t.Fatalf("send attempts = %d", cmd.SendAttempts)
+	}
+	if cmd.SentTime != 77 {
+		t.Fatalf("sent time = %d", cmd.SentTime)
+	}
+	if cmd.RoundTripTimeout != 500 {
+		t.Fatalf("round trip timeout = %d", cmd.RoundTripTimeout)
+	}
+
+	write := sock.MustWrite(t, 0)
+	header, err := iprotocol.ParseHeader(write.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Flags != iprotocol.HeaderFlagSentTime {
+		t.Fatalf("header flags = 0x%04x", header.Flags)
+	}
+	if header.SentTime != 77 {
+		t.Fatalf("header sent time = %d", header.SentTime)
+	}
+}
+
 func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: host.MustConnectedPeer()}
@@ -236,11 +288,8 @@ func TestFlushStopsBeforeExceedingMTUBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := sock.WriteCount(); got != 1 {
-		t.Fatalf("WriteCount after first flush = %d", got)
-	}
-	if got := peer.OutgoingCount(); got != 1 {
-		t.Fatalf("OutgoingCount after first flush = %d", got)
+	if got := sock.WriteCount(); got != 2 {
+		t.Fatalf("WriteCount after flush = %d", got)
 	}
 
 	firstWrite := sock.MustWrite(t, 0)
@@ -250,16 +299,15 @@ func TestFlushStopsBeforeExceedingMTUBudget(t *testing.T) {
 	if got := countWireCommands(t, firstWrite.Payload); got != 1 {
 		t.Fatalf("first datagram command count = %d", got)
 	}
-
-	if err := host.Flush(context.Background()); err != nil {
-		t.Fatal(err)
+	secondWrite := sock.MustWrite(t, 1)
+	if len(secondWrite.Payload) != 20 {
+		t.Fatalf("second datagram length = %d", len(secondWrite.Payload))
 	}
-
-	if got := sock.WriteCount(); got != 2 {
-		t.Fatalf("WriteCount after second flush = %d", got)
+	if got := countWireCommands(t, secondWrite.Payload); got != 1 {
+		t.Fatalf("second datagram command count = %d", got)
 	}
 	if got := peer.OutgoingCount(); got != 0 {
-		t.Fatalf("OutgoingCount after second flush = %d", got)
+		t.Fatalf("OutgoingCount after flush = %d", got)
 	}
 }
 
@@ -277,28 +325,50 @@ func TestFlushStopsAtMaximumCommandCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := sock.WriteCount(); got != 1 {
-		t.Fatalf("WriteCount after first flush = %d", got)
+	if got := sock.WriteCount(); got != 2 {
+		t.Fatalf("WriteCount after flush = %d", got)
 	}
 	if got := countWireCommands(t, sock.MustWrite(t, 0).Payload); got != int(iprotocol.MaximumPacketCommands) {
 		t.Fatalf("first datagram command count = %d", got)
 	}
-	if got := peer.OutgoingCount(); got != 1 {
-		t.Fatalf("OutgoingCount after first flush = %d", got)
+	if got := countWireCommands(t, sock.MustWrite(t, 1).Payload); got != 1 {
+		t.Fatalf("second datagram command count = %d", got)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount after flush = %d", got)
+	}
+}
+
+func TestFlushMergesQueuesByQueueTime(t *testing.T) {
+	host, sock := newTestHost(t)
+	peer := &testPeer{Raw: host.MustConnectedPeer()}
+
+	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("r1"), Flags: goenet.PacketFlagReliable}); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("u2")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Send(peer.Raw, 0, &goenet.Packet{Data: []byte("r3"), Flags: goenet.PacketFlagReliable}); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := host.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := sock.WriteCount(); got != 2 {
-		t.Fatalf("WriteCount after second flush = %d", got)
+	commands := parseWireCommands(t, sock.MustWrite(t, 0).Payload)
+	if len(commands) != 3 {
+		t.Fatalf("wire command count = %d", len(commands))
 	}
-	if got := countWireCommands(t, sock.MustWrite(t, 1).Payload); got != 1 {
-		t.Fatalf("second datagram command count = %d", got)
+	if got := string(commands[0].payload); got != "r1" {
+		t.Fatalf("command 0 payload = %q", got)
 	}
-	if got := peer.OutgoingCount(); got != 0 {
-		t.Fatalf("OutgoingCount after second flush = %d", got)
+	if got := string(commands[1].payload); got != "u2" {
+		t.Fatalf("command 1 payload = %q", got)
+	}
+	if got := string(commands[2].payload); got != "r3" {
+		t.Fatalf("command 2 payload = %q", got)
 	}
 }
 
@@ -340,6 +410,17 @@ func newSizedTestHost(t *testing.T, mtu uint32) (*Host, *testsupport.FakeSocket)
 func countWireCommands(t *testing.T, payload []byte) int {
 	t.Helper()
 
+	return len(parseWireCommands(t, payload))
+}
+
+type wireCommand struct {
+	command iprotocol.Command
+	payload []byte
+}
+
+func parseWireCommands(t *testing.T, payload []byte) []wireCommand {
+	t.Helper()
+
 	header, err := iprotocol.ParseHeader(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +431,7 @@ func countWireCommands(t *testing.T, payload []byte) int {
 		offset = 4
 	}
 
-	count := 0
+	var commands []wireCommand
 	for offset < len(payload) {
 		cmd := iprotocol.Command(payload[offset] & byte(iprotocol.CommandMask))
 		switch cmd {
@@ -359,24 +440,76 @@ func countWireCommands(t *testing.T, payload []byte) int {
 				t.Fatalf("truncated reliable command at offset %d", offset)
 			}
 			dataLen := int(binary.BigEndian.Uint16(payload[offset+4 : offset+6]))
+			if offset+6+dataLen > len(payload) {
+				t.Fatalf("truncated reliable payload at offset %d", offset)
+			}
+			commands = append(commands, wireCommand{
+				command: cmd,
+				payload: append([]byte(nil), payload[offset+6:offset+6+dataLen]...),
+			})
 			offset += 6 + dataLen
 		case iprotocol.CommandSendUnreliable:
 			if offset+8 > len(payload) {
 				t.Fatalf("truncated unreliable command at offset %d", offset)
 			}
 			dataLen := int(binary.BigEndian.Uint16(payload[offset+6 : offset+8]))
+			if offset+8+dataLen > len(payload) {
+				t.Fatalf("truncated unreliable payload at offset %d", offset)
+			}
+			commands = append(commands, wireCommand{
+				command: cmd,
+				payload: append([]byte(nil), payload[offset+8:offset+8+dataLen]...),
+			})
 			offset += 8 + dataLen
+		case iprotocol.CommandPing:
+			if offset+4 > len(payload) {
+				t.Fatalf("truncated ping command at offset %d", offset)
+			}
+			commands = append(commands, wireCommand{command: cmd})
+			offset += 4
 		default:
 			t.Fatalf("unexpected command %d at offset %d", cmd, offset)
 		}
-		count++
 	}
 
 	if offset != len(payload) {
 		t.Fatalf("wire payload ended at %d of %d", offset, len(payload))
 	}
 
-	return count
+	return commands
+}
+
+type protocolCommand struct {
+	command                iprotocol.Command
+	flags                  iprotocol.CommandFlag
+	channelID              uint8
+	reliableSequenceNumber uint16
+}
+
+func (c protocolCommand) MarshalBinary(dst []byte) []byte {
+	start := len(dst)
+	dst = append(dst, make([]byte, 4)...)
+	dst[start] = byte(c.command | iprotocol.Command(c.flags))
+	dst[start+1] = c.channelID
+	binary.BigEndian.PutUint16(dst[start+2:start+4], c.reliableSequenceNumber)
+	return dst
+}
+
+func queueGeneralCommand(host *Host, p *ipeer.Peer, payload protocolCommand) {
+	host.totalQueued++
+	p.OutgoingCommands.PushBack(&ipeer.OutgoingCommand{
+		QueueTime:              host.totalQueued,
+		ReliableSequenceNumber: payload.reliableSequenceNumber,
+		Command: ipeer.Command{
+			Header: ipeer.Header{
+				Command:                payload.command,
+				ChannelID:              payload.channelID,
+				Flags:                  payload.flags,
+				ReliableSequenceNumber: payload.reliableSequenceNumber,
+			},
+			Payload: payload,
+		},
+	})
 }
 
 func bytesOfLen(n int, b byte) []byte {

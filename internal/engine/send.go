@@ -19,8 +19,10 @@ const (
 )
 
 type outgoingSelection struct {
-	command    *peer.OutgoingCommand
-	isReliable bool
+	command           *peer.OutgoingCommand
+	fromReliableQueue bool
+	requiresAck       bool
+	wireSize          int
 }
 
 type sendReliablePayload struct {
@@ -117,27 +119,29 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goene
 
 func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
-		payload, wroteAny, err := h.flushPeer(ctx, p)
-		if err != nil {
-			return err
-		}
-		if !wroteAny {
-			continue
-		}
+		for {
+			payload, wroteAny, err := h.flushPeerDatagram(ctx, p)
+			if err != nil {
+				return err
+			}
+			if !wroteAny {
+				break
+			}
 
-		n, err := h.socket.WritePacket(ctx, p.Address.AddrPort(), payload)
-		if err != nil {
-			return err
-		}
-		if n != len(payload) {
-			return fmt.Errorf("engine: short write: wrote %d of %d", n, len(payload))
+			n, err := h.socket.WritePacket(ctx, p.Address.AddrPort(), payload)
+			if err != nil {
+				return err
+			}
+			if n != len(payload) {
+				return fmt.Errorf("engine: short write: wrote %d of %d", n, len(payload))
+			}
 		}
 	}
 
 	return nil
 }
 
-func (h *Host) flushPeer(ctx context.Context, p *peer.Peer) ([]byte, bool, error) {
+func (h *Host) flushPeerDatagram(ctx context.Context, p *peer.Peer) ([]byte, bool, error) {
 	_ = ctx
 
 	selected := h.selectOutgoingBatch(p)
@@ -146,80 +150,104 @@ func (h *Host) flushPeer(ctx context.Context, p *peer.Peer) ([]byte, bool, error
 	}
 
 	header := protocol.Header{}
-	if batchHasReliable(selected) {
+	if batchRequiresAck(selected) {
 		header.Flags = protocol.HeaderFlagSentTime
 		header.SentTime = uint16(h.serviceTime)
 	}
 	payload := header.MarshalBinary(nil)
 
 	for _, item := range selected {
-		if item.isReliable {
+		if item.fromReliableQueue {
 			cmd := p.OutgoingSendReliableCommands.Remove(p.OutgoingSendReliableCommands.Front())
-			cmd.SendAttempts++
-			cmd.SentTime = h.serviceTime
-			if cmd.RoundTripTimeout == 0 {
-				cmd.RoundTripTimeout = defaultRoundTripTimeout
+			if item.requiresAck {
+				markCommandInFlight(cmd, h.serviceTime)
+				payload = cmd.Command.Payload.MarshalBinary(payload)
+				p.SentReliableCommands.PushBack(cmd)
+				continue
 			}
 
+			payload = cmd.Command.Payload.MarshalBinary(payload)
+			continue
+		}
+
+		cmd := p.OutgoingCommands.Remove(p.OutgoingCommands.Front())
+		if item.requiresAck {
+			markCommandInFlight(cmd, h.serviceTime)
 			payload = cmd.Command.Payload.MarshalBinary(payload)
 			p.SentReliableCommands.PushBack(cmd)
 			continue
 		}
 
-		cmd := p.OutgoingCommands.Remove(p.OutgoingCommands.Front())
 		payload = cmd.Command.Payload.MarshalBinary(payload)
 	}
 
 	return payload, true, nil
 }
 
+func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {
+	cmd.SendAttempts++
+	cmd.SentTime = serviceTime
+	if cmd.RoundTripTimeout == 0 {
+		cmd.RoundTripTimeout = defaultRoundTripTimeout
+	}
+}
+
 func (h *Host) selectOutgoingBatch(p *peer.Peer) []outgoingSelection {
 	reliableFront := p.OutgoingSendReliableCommands.Front()
-	unreliableFront := p.OutgoingCommands.Front()
+	outgoingFront := p.OutgoingCommands.Front()
 
 	selected := make([]outgoingSelection, 0, protocol.MaximumPacketCommands)
 	bodySize := 0
-	hasReliable := false
+	hasAck := false
 
-	for reliableFront != nil || unreliableFront != nil {
+	for reliableFront != nil || outgoingFront != nil {
 		var next outgoingSelection
 		switch {
 		case reliableFront == nil:
-			next = outgoingSelection{command: unreliableFront.Value(), isReliable: false}
-			unreliableFront = unreliableFront.Next()
-		case unreliableFront == nil:
-			next = outgoingSelection{command: reliableFront.Value(), isReliable: true}
+			next = buildSelection(outgoingFront.Value(), false)
+			outgoingFront = outgoingFront.Next()
+		case outgoingFront == nil:
+			next = buildSelection(reliableFront.Value(), true)
 			reliableFront = reliableFront.Next()
-		case reliableFront.Value().QueueTime <= unreliableFront.Value().QueueTime:
-			next = outgoingSelection{command: reliableFront.Value(), isReliable: true}
+		case reliableFront.Value().QueueTime <= outgoingFront.Value().QueueTime:
+			next = buildSelection(reliableFront.Value(), true)
 			reliableFront = reliableFront.Next()
 		default:
-			next = outgoingSelection{command: unreliableFront.Value(), isReliable: false}
-			unreliableFront = unreliableFront.Next()
+			next = buildSelection(outgoingFront.Value(), false)
+			outgoingFront = outgoingFront.Next()
 		}
 
-		nextHasReliable := hasReliable || next.isReliable
+		nextHasAck := hasAck || next.requiresAck
 		headerSize := protocolHeaderSizeWithoutSentTime
-		if nextHasReliable {
+		if nextHasAck {
 			headerSize = protocolHeaderSizeWithSentTime
 		}
 
 		if len(selected) >= int(protocol.MaximumPacketCommands) ||
-			headerSize+bodySize+commandWireSize(next.command) > int(h.config.MTU) {
+			headerSize+bodySize+next.wireSize > int(h.config.MTU) {
 			break
 		}
 
 		selected = append(selected, next)
-		bodySize += commandWireSize(next.command)
-		hasReliable = nextHasReliable
+		bodySize += next.wireSize
+		hasAck = nextHasAck
 	}
 
 	return selected
 }
 
-func batchHasReliable(selected []outgoingSelection) bool {
+func buildSelection(cmd *peer.OutgoingCommand, fromReliableQueue bool) outgoingSelection {
+	return outgoingSelection{
+		command:           cmd,
+		fromReliableQueue: fromReliableQueue,
+		requiresAck:       commandRequiresAck(cmd),
+		wireSize:          commandWireSize(cmd),
+	}
+}
+
+func batchRequiresAck(selected []outgoingSelection) bool {
 	for _, item := range selected {
-		if item.isReliable {
+		if item.requiresAck {
 			return true
 		}
 	}
@@ -227,15 +255,12 @@ func batchHasReliable(selected []outgoingSelection) bool {
 	return false
 }
 
+func commandRequiresAck(cmd *peer.OutgoingCommand) bool {
+	return cmd.Command.Header.Flags&protocol.CommandFlagAcknowledge != 0
+}
+
 func commandWireSize(cmd *peer.OutgoingCommand) int {
-	switch cmd.Command.Header.Command {
-	case protocol.CommandSendReliable:
-		return sendReliableCommandSize + len(cmd.Packet.Data)
-	case protocol.CommandSendUnreliable:
-		return sendUnreliableCommandSize + len(cmd.Packet.Data)
-	default:
-		return 0
-	}
+	return len(cmd.Command.Payload.MarshalBinary(nil))
 }
 
 func (h *Host) validatePacketSize(packet *goenet.Packet) error {
