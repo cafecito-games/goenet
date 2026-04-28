@@ -3,21 +3,21 @@ package peer
 import (
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/core"
 )
 
 func TestPeerStateOrdinalsMatchENet(t *testing.T) {
-	states := []goenet.PeerState{
-		goenet.PeerStateDisconnected,
-		goenet.PeerStateConnecting,
-		goenet.PeerStateAcknowledgingConnect,
-		goenet.PeerStateConnectionPending,
-		goenet.PeerStateConnectionSucceeded,
-		goenet.PeerStateConnected,
-		goenet.PeerStateDisconnectLater,
-		goenet.PeerStateDisconnecting,
-		goenet.PeerStateAcknowledgingDisconnect,
-		goenet.PeerStateZombie,
+	states := []core.PeerState{
+		core.PeerStateDisconnected,
+		core.PeerStateConnecting,
+		core.PeerStateAcknowledgingConnect,
+		core.PeerStateConnectionPending,
+		core.PeerStateConnectionSucceeded,
+		core.PeerStateConnected,
+		core.PeerStateDisconnectLater,
+		core.PeerStateDisconnecting,
+		core.PeerStateAcknowledgingDisconnect,
+		core.PeerStateZombie,
 	}
 
 	for want, got := range states {
@@ -50,7 +50,7 @@ func TestNewChannelStartsAtZeroSequences(t *testing.T) {
 }
 
 func TestConfigDefaultsMatchENet(t *testing.T) {
-	cfg := goenet.DefaultConfig()
+	cfg := core.DefaultConfig()
 	if cfg.MTU != 1392 {
 		t.Fatalf("MTU = %d", cfg.MTU)
 	}

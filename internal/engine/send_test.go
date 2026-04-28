@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	ipeer "github.com/cafecito-games/goenet/internal/peer"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
@@ -644,11 +643,11 @@ func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 		t.Fatal(err)
 	}
 
-	cfg := goenet.DefaultConfig()
+	cfg := core.DefaultConfig()
 	cfg.ChannelLimit = 1
 
 	sock := testsupport.NewFakeSocket()
-	host := NewHost(coreConfigForTest(cfg), sock, 77)
+	host := NewHost(cfg, sock, 77)
 	host.AddPeer(addr, core.PeerStateConnected)
 	return host, sock
 }
@@ -674,12 +673,12 @@ func newSizedTestHost(t *testing.T, mtu uint32) (*Host, *testsupport.FakeSocket)
 		t.Fatal(err)
 	}
 
-	cfg := goenet.DefaultConfig()
+	cfg := core.DefaultConfig()
 	cfg.ChannelLimit = 1
 	cfg.MTU = mtu
 
 	sock := testsupport.NewFakeSocket()
-	host := NewHost(coreConfigForTest(cfg), sock, 77)
+	host := NewHost(cfg, sock, 77)
 	host.AddPeer(addr, core.PeerStateConnected)
 	return host, sock
 }
@@ -754,10 +753,6 @@ func parseWireCommands(t *testing.T, payload []byte) []wireCommand {
 	}
 
 	return commands
-}
-
-func coreConfigForTest(cfg goenet.Config) core.Config {
-	return coreConfigFromPublic(cfg)
 }
 
 type protocolCommand struct {

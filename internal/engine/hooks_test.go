@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 )
@@ -17,14 +16,14 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 		capture []byte
 	)
 
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
-		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
+		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
 			calls++
 			if addr != netip.MustParseAddrPort("127.0.0.1:9001") {
 				t.Fatalf("intercept addr = %v", addr)
 			}
 			capture = append([]byte(nil), payload...)
-			return goenet.InterceptDecision{Result: goenet.InterceptResultConsume}, nil
+			return core.InterceptDecision{Result: core.InterceptResultConsume}, nil
 		})
 	})
 
@@ -54,12 +53,12 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 }
 
 func TestServiceInterceptCanSynthesizeEvent(t *testing.T) {
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
-		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
-			return goenet.InterceptDecision{
-				Result: goenet.InterceptResultConsume,
-				Event: &goenet.Event{
-					Type: goenet.EventDisconnect,
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
+		cfg.Intercept = interceptFunc(func(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
+			return core.InterceptDecision{
+				Result: core.InterceptResultConsume,
+				Event: &core.Event{
+					Type: core.EventDisconnect,
 					Data: 0xdecafbad,
 				},
 			}, nil
@@ -86,7 +85,7 @@ func TestServiceInterceptCanSynthesizeEvent(t *testing.T) {
 func TestServiceChecksumRejectsInvalidAndAcceptsValidInboundPackets(t *testing.T) {
 	checksummer := checksumFunc(testChecksum)
 
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
 		cfg.Checksum = checksummer
 	})
 	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
@@ -133,7 +132,7 @@ func TestServiceChecksumRejectsInvalidAndAcceptsValidInboundPackets(t *testing.T
 func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	compressor := &testCompressor{}
 
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
 		cfg.Compressor = compressor
 	})
 	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
@@ -194,15 +193,15 @@ func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	}
 }
 
-type interceptFunc func(netip.AddrPort, []byte) (goenet.InterceptDecision, error)
+type interceptFunc func(netip.AddrPort, []byte) (core.InterceptDecision, error)
 
-func (fn interceptFunc) Intercept(addr netip.AddrPort, payload []byte) (goenet.InterceptDecision, error) {
+func (fn interceptFunc) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
 	return fn(addr, payload)
 }
 
-type checksumFunc func([]goenet.Buffer) uint32
+type checksumFunc func([]core.Buffer) uint32
 
-func (fn checksumFunc) Checksum(buffers []goenet.Buffer) uint32 {
+func (fn checksumFunc) Checksum(buffers []core.Buffer) uint32 {
 	return fn(buffers)
 }
 
@@ -213,7 +212,7 @@ type testCompressor struct {
 	stored          map[byte][]byte
 }
 
-func (c *testCompressor) Compress(buffers []goenet.Buffer, inLimit int, out []byte) (int, error) {
+func (c *testCompressor) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
 	c.compressCalls++
 	data := flattenBuffers(buffers)
 	if len(data) > inLimit {
@@ -244,12 +243,12 @@ func (c *testCompressor) Decompress(in []byte, out []byte) (int, error) {
 	return len(data), nil
 }
 
-func marshalCompressedDatagram(t *testing.T, compressor goenet.Compressor, header iprotocol.Header, commands ...iprotocol.PacketCommand) []byte {
+func marshalCompressedDatagram(t *testing.T, compressor core.Compressor, header iprotocol.Header, commands ...iprotocol.PacketCommand) []byte {
 	t.Helper()
 
 	body := marshalDatagram(iprotocol.Header{}, commands...)[2:]
 	compressed := make([]byte, len(body)+8)
-	n, err := compressor.Compress([]goenet.Buffer{{Data: body}}, len(body), compressed)
+	n, err := compressor.Compress([]core.Buffer{{Data: body}}, len(body), compressed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,14 +258,14 @@ func marshalCompressedDatagram(t *testing.T, compressor goenet.Compressor, heade
 	return wire
 }
 
-func checksumDatagram(t *testing.T, seed uint32, checksummer goenet.Checksummer, header iprotocol.Header, command iprotocol.PacketCommand) []byte {
+func checksumDatagram(t *testing.T, seed uint32, checksummer core.Checksummer, header iprotocol.Header, command iprotocol.PacketCommand) []byte {
 	t.Helper()
 
 	headerBytes := header.MarshalBinary(nil)
 	bodyBytes := command.MarshalBinary(nil)
 	checksumBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(checksumBytes, seed)
-	sum := checksummer.Checksum([]goenet.Buffer{
+	sum := checksummer.Checksum([]core.Buffer{
 		{Data: headerBytes},
 		{Data: checksumBytes},
 		{Data: bodyBytes},
@@ -279,7 +278,7 @@ func checksumDatagram(t *testing.T, seed uint32, checksummer goenet.Checksummer,
 	return wire
 }
 
-func testChecksum(buffers []goenet.Buffer) uint32 {
+func testChecksum(buffers []core.Buffer) uint32 {
 	var sum uint32
 	for _, buffer := range buffers {
 		for _, b := range buffer.Data {
@@ -289,7 +288,7 @@ func testChecksum(buffers []goenet.Buffer) uint32 {
 	return sum
 }
 
-func flattenBuffers(buffers []goenet.Buffer) []byte {
+func flattenBuffers(buffers []core.Buffer) []byte {
 	total := 0
 	for _, buffer := range buffers {
 		total += len(buffer.Data)

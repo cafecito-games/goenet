@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	ipeer "github.com/cafecito-games/goenet/internal/peer"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
@@ -14,7 +13,7 @@ import (
 
 func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
 	addr := netip.MustParseAddrPort("127.0.0.1:9001")
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
 		cfg.PeerCount = 1
 	})
 
@@ -602,7 +601,7 @@ func TestServiceDropsPayloadCommandsWhileDisconnectLaterButStillAcknowledgesReli
 }
 
 func TestServiceRejectsInboundPayloadLargerThanMaximumPacketSize(t *testing.T) {
-	host, sock := newReceiveHost(t, func(cfg *goenet.Config) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
 		cfg.MaximumPacketSize = 3
 	})
 	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
@@ -736,9 +735,9 @@ func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
 }
 
 func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
-	cfg := goenet.DefaultConfig()
+	cfg := core.DefaultConfig()
 	sock := testsupport.NewFakeSocket()
-	host := NewHost(coreConfigFromPublic(cfg), sock, 0)
+	host := NewHost(cfg, sock, 0)
 	peer := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 
 	if got := len(peer.Channels); got != int(iprotocol.MaximumChannelCount) {
@@ -746,17 +745,17 @@ func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
 	}
 }
 
-func newReceiveHost(t *testing.T, configure func(*goenet.Config)) (*Host, *testsupport.FakeSocket) {
+func newReceiveHost(t *testing.T, configure func(*core.Config)) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
-	cfg := goenet.DefaultConfig()
+	cfg := core.DefaultConfig()
 	cfg.ChannelLimit = 1
 	if configure != nil {
 		configure(&cfg)
 	}
 
 	sock := testsupport.NewFakeSocket()
-	return NewHost(coreConfigFromPublic(cfg), sock, 77), sock
+	return NewHost(cfg, sock, 77), sock
 }
 
 func mustAddress(t *testing.T, value string) core.Address {
@@ -792,91 +791,32 @@ func mustPeerInState(t *testing.T, host *Host, state core.PeerState) *ipeer.Peer
 	return nil
 }
 
-func coreConfigFromPublic(cfg goenet.Config) core.Config {
-	coreCfg := core.DefaultConfig()
-	coreCfg.PeerCount = cfg.PeerCount
-	coreCfg.ChannelLimit = cfg.ChannelLimit
-	coreCfg.MTU = cfg.MTU
-	coreCfg.MaximumPacketSize = cfg.MaximumPacketSize
-	coreCfg.MaximumWaitingData = cfg.MaximumWaitingData
-	if cfg.Checksum != nil {
-		coreCfg.Checksum = checksumAdapter{inner: cfg.Checksum}
-	}
-	if cfg.Compressor != nil {
-		coreCfg.Compressor = compressorAdapter{inner: cfg.Compressor}
-	}
-	if cfg.Intercept != nil {
-		coreCfg.Intercept = interceptAdapter{inner: cfg.Intercept}
-	}
-
-	return coreCfg
-}
-
 type interceptAdapter struct {
-	inner goenet.Interceptor
+	inner core.Interceptor
 }
 
 func (a interceptAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
-	decision, err := a.inner.Intercept(addr, payload)
-	if err != nil {
-		return core.InterceptDecision{}, err
-	}
-
-	var event *core.Event
-	if decision.Event != nil {
-		event = &core.Event{
-			Type:      core.EventType(decision.Event.Type),
-			ChannelID: decision.Event.ChannelID,
-			Data:      decision.Event.Data,
-			Packet:    packetFromPublic(decision.Event.Packet),
-		}
-	}
-
-	return core.InterceptDecision{
-		Result: core.InterceptResult(decision.Result),
-		Event:  event,
-	}, nil
+	return a.inner.Intercept(addr, payload)
 }
 
 type checksumAdapter struct {
-	inner goenet.Checksummer
+	inner core.Checksummer
 }
 
 func (a checksumAdapter) Checksum(buffers []core.Buffer) uint32 {
-	publicBuffers := make([]goenet.Buffer, len(buffers))
-	for i, buffer := range buffers {
-		publicBuffers[i] = goenet.Buffer{Data: buffer.Data}
-	}
-
-	return a.inner.Checksum(publicBuffers)
+	return a.inner.Checksum(buffers)
 }
 
 type compressorAdapter struct {
-	inner goenet.Compressor
+	inner core.Compressor
 }
 
 func (a compressorAdapter) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
-	publicBuffers := make([]goenet.Buffer, len(buffers))
-	for i, buffer := range buffers {
-		publicBuffers[i] = goenet.Buffer{Data: buffer.Data}
-	}
-
-	return a.inner.Compress(publicBuffers, inLimit, out)
+	return a.inner.Compress(buffers, inLimit, out)
 }
 
 func (a compressorAdapter) Decompress(in []byte, out []byte) (int, error) {
 	return a.inner.Decompress(in, out)
-}
-
-func packetFromPublic(packet *goenet.Packet) *core.Packet {
-	if packet == nil {
-		return nil
-	}
-
-	return &core.Packet{
-		Data:  packet.Data,
-		Flags: core.PacketFlag(packet.Flags),
-	}
 }
 
 func mustSingleCommand(t *testing.T, payload []byte) (iprotocol.Header, iprotocol.PacketCommand) {
