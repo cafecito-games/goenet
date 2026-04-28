@@ -29,3 +29,30 @@ func TestAddressCarriesIPv6AddrPortAndScopeID(t *testing.T) {
 		t.Fatalf("ScopeID = %d", addr.ScopeID)
 	}
 }
+
+func TestEventTypeValuesMatchENet(t *testing.T) {
+	if goenet.EventNone != 0 {
+		t.Fatalf("EventNone = %d", goenet.EventNone)
+	}
+	if goenet.EventConnect != 1 {
+		t.Fatalf("EventConnect = %d", goenet.EventConnect)
+	}
+	if goenet.EventDisconnect != 2 {
+		t.Fatalf("EventDisconnect = %d", goenet.EventDisconnect)
+	}
+	if goenet.EventReceive != 3 {
+		t.Fatalf("EventReceive = %d", goenet.EventReceive)
+	}
+	if goenet.EventDisconnectTimeout != 4 {
+		t.Fatalf("EventDisconnectTimeout = %d", goenet.EventDisconnectTimeout)
+	}
+}
+
+func TestPacketFlagValuesMatchENet(t *testing.T) {
+	if goenet.PacketFlagReliable != 1 {
+		t.Fatalf("PacketFlagReliable = %d", goenet.PacketFlagReliable)
+	}
+	if goenet.PacketFlagUnsequenced != 2 {
+		t.Fatalf("PacketFlagUnsequenced = %d", goenet.PacketFlagUnsequenced)
+	}
+}
