@@ -8,7 +8,7 @@ import (
 )
 
 func TestOutgoingQueuePreservesFIFOOrder(t *testing.T) {
-	var q outgoingQueue
+	var q outgoingCommandList
 
 	first := &OutgoingCommand{
 		ReliableSequenceNumber: 1,
@@ -19,62 +19,86 @@ func TestOutgoingQueuePreservesFIFOOrder(t *testing.T) {
 		Packet:                 &goenet.Packet{Data: []byte("second")},
 	}
 
-	q.Push(first)
-	q.Push(second)
+	firstElem := q.PushBack(first)
+	secondElem := q.PushBack(second)
 
 	if got := q.Len(); got != 2 {
 		t.Fatalf("Len() = %d", got)
 	}
-
-	gotFirst, ok := q.Pop()
-	if !ok {
-		t.Fatal("first Pop() = empty")
+	if q.Front() != firstElem {
+		t.Fatal("Front() did not return first element")
 	}
-	if gotFirst != first {
-		t.Fatalf("first Pop() = %+v, want %+v", gotFirst, first)
+	if q.Back() != secondElem {
+		t.Fatal("Back() did not return second element")
 	}
-
-	gotSecond, ok := q.Pop()
-	if !ok {
-		t.Fatal("second Pop() = empty")
+	if firstElem.Next() != secondElem {
+		t.Fatal("first.Next() did not return second element")
 	}
-	if gotSecond != second {
-		t.Fatalf("second Pop() = %+v, want %+v", gotSecond, second)
+	if got := q.Remove(firstElem); got != first {
+		t.Fatalf("Remove(first) = %+v, want %+v", got, first)
 	}
-
-	if _, ok := q.Pop(); ok {
-		t.Fatal("third Pop() unexpectedly succeeded")
+	if q.Front() != secondElem {
+		t.Fatal("Front() did not advance to second element after removal")
 	}
 }
 
-func TestAcknowledgementQueuePreservesInsertionOrder(t *testing.T) {
-	var q acknowledgementQueue
+func TestOutgoingCommandListSupportsOrderedInsertion(t *testing.T) {
+	var q outgoingCommandList
+
+	higher := &OutgoingCommand{ReliableSequenceNumber: 20}
+	lower := &OutgoingCommand{ReliableSequenceNumber: 10}
+	middle := &OutgoingCommand{ReliableSequenceNumber: 15}
+
+	q.InsertOrdered(higher, func(a, b *OutgoingCommand) bool {
+		return a.ReliableSequenceNumber < b.ReliableSequenceNumber
+	})
+	q.InsertOrdered(lower, func(a, b *OutgoingCommand) bool {
+		return a.ReliableSequenceNumber < b.ReliableSequenceNumber
+	})
+	q.InsertOrdered(middle, func(a, b *OutgoingCommand) bool {
+		return a.ReliableSequenceNumber < b.ReliableSequenceNumber
+	})
+
+	want := []*OutgoingCommand{lower, middle, higher}
+	index := 0
+	for elem := q.Front(); elem != nil; elem = elem.Next() {
+		if got := elem.Value(); got != want[index] {
+			t.Fatalf("element %d = %+v, want %+v", index, got, want[index])
+		}
+		index++
+	}
+	if index != len(want) {
+		t.Fatalf("iterated %d elements, want %d", index, len(want))
+	}
+}
+
+func TestAcknowledgementListSupportsInsertBeforeAndRemove(t *testing.T) {
+	var q acknowledgementList
 
 	first := &Acknowledgement{SentTime: 10}
 	second := &Acknowledgement{SentTime: 20}
+	inserted := &Acknowledgement{SentTime: 15}
 
-	q.Push(first)
-	q.Push(second)
+	firstElem := q.PushBack(first)
+	secondElem := q.PushBack(second)
+	insertedElem := q.InsertBefore(secondElem, inserted)
 
-	gotFirst, ok := q.Pop()
-	if !ok {
-		t.Fatal("first Pop() = empty")
+	if firstElem.Next() != insertedElem {
+		t.Fatal("first.Next() did not return inserted element")
 	}
-	if gotFirst != first {
-		t.Fatalf("first Pop() = %+v, want %+v", gotFirst, first)
+	if insertedElem.Next() != secondElem {
+		t.Fatal("inserted.Next() did not return second element")
 	}
-
-	gotSecond, ok := q.Pop()
-	if !ok {
-		t.Fatal("second Pop() = empty")
+	if got := q.Remove(insertedElem); got != inserted {
+		t.Fatalf("Remove(inserted) = %+v, want %+v", got, inserted)
 	}
-	if gotSecond != second {
-		t.Fatalf("second Pop() = %+v, want %+v", gotSecond, second)
+	if firstElem.Next() != secondElem {
+		t.Fatal("first.Next() did not reconnect to second element")
 	}
 }
 
 func TestIncomingQueuePreservesFIFOOrder(t *testing.T) {
-	var q incomingQueue
+	var q incomingCommandList
 
 	first := &IncomingCommand{
 		Command: Command{
@@ -94,27 +118,35 @@ func TestIncomingQueuePreservesFIFOOrder(t *testing.T) {
 			},
 		},
 	}
+	third := &IncomingCommand{
+		Command: Command{
+			Header: Header{
+				Command:                protocol.CommandSendReliable,
+				ChannelID:              1,
+				ReliableSequenceNumber: 9,
+			},
+		},
+	}
 
-	q.Push(first)
-	q.Push(second)
+	secondElem := q.PushBack(second)
+	q.InsertBefore(secondElem, first)
+	q.InsertOrdered(third, func(a, b *IncomingCommand) bool {
+		return a.Command.Header.ReliableSequenceNumber < b.Command.Header.ReliableSequenceNumber
+	})
 
-	if got := q.Len(); got != 2 {
+	if got := q.Len(); got != 3 {
 		t.Fatalf("Len() = %d", got)
 	}
 
-	gotFirst, ok := q.Pop()
-	if !ok {
-		t.Fatal("first Pop() = empty")
+	want := []*IncomingCommand{third, first, second}
+	index := 0
+	for elem := q.Front(); elem != nil; elem = elem.Next() {
+		if got := elem.Value(); got != want[index] {
+			t.Fatalf("element %d = %+v, want %+v", index, got, want[index])
+		}
+		index++
 	}
-	if gotFirst != first {
-		t.Fatalf("first Pop() = %+v, want %+v", gotFirst, first)
-	}
-
-	gotSecond, ok := q.Pop()
-	if !ok {
-		t.Fatal("second Pop() = empty")
-	}
-	if gotSecond != second {
-		t.Fatalf("second Pop() = %+v, want %+v", gotSecond, second)
+	if index != len(want) {
+		t.Fatalf("iterated %d elements, want %d", index, len(want))
 	}
 }

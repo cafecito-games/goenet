@@ -61,3 +61,20 @@ func TestConfigDefaultsMatchENet(t *testing.T) {
 		t.Fatalf("MaximumWaitingData = %d", cfg.MaximumWaitingData)
 	}
 }
+
+func TestPeerZeroValueProvidesControlSequenceAnchorAndDurableQueues(t *testing.T) {
+	var p Peer
+
+	if p.OutgoingReliableSequenceNumber != 0 {
+		t.Fatalf("OutgoingReliableSequenceNumber = %d", p.OutgoingReliableSequenceNumber)
+	}
+	if p.OutgoingSendReliableCommands.Len() != 0 {
+		t.Fatalf("OutgoingSendReliableCommands.Len() = %d", p.OutgoingSendReliableCommands.Len())
+	}
+	if p.SentReliableCommands.Len() != 0 {
+		t.Fatalf("SentReliableCommands.Len() = %d", p.SentReliableCommands.Len())
+	}
+	if p.DispatchedCommands.Len() != 0 {
+		t.Fatalf("DispatchedCommands.Len() = %d", p.DispatchedCommands.Len())
+	}
+}

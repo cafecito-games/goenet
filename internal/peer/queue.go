@@ -50,71 +50,123 @@ type Acknowledgement struct {
 	Command  Command
 }
 
-type outgoingQueue struct {
-	items []*OutgoingCommand
+type listElement[T any] struct {
+	value T
+	prev  *listElement[T]
+	next  *listElement[T]
 }
 
-func (q *outgoingQueue) Push(cmd *OutgoingCommand) {
-	q.items = append(q.items, cmd)
-}
-
-func (q *outgoingQueue) Pop() (*OutgoingCommand, bool) {
-	if len(q.items) == 0 {
-		return nil, false
+func (e *listElement[T]) Next() *listElement[T] {
+	if e == nil {
+		return nil
 	}
 
-	cmd := q.items[0]
-	q.items[0] = nil
-	q.items = q.items[1:]
-	return cmd, true
+	return e.next
 }
 
-func (q *outgoingQueue) Len() int {
-	return len(q.items)
-}
-
-type incomingQueue struct {
-	items []*IncomingCommand
-}
-
-func (q *incomingQueue) Push(cmd *IncomingCommand) {
-	q.items = append(q.items, cmd)
-}
-
-func (q *incomingQueue) Pop() (*IncomingCommand, bool) {
-	if len(q.items) == 0 {
-		return nil, false
+func (e *listElement[T]) Prev() *listElement[T] {
+	if e == nil {
+		return nil
 	}
 
-	cmd := q.items[0]
-	q.items[0] = nil
-	q.items = q.items[1:]
-	return cmd, true
+	return e.prev
 }
 
-func (q *incomingQueue) Len() int {
-	return len(q.items)
+func (e *listElement[T]) Value() T {
+	return e.value
 }
 
-type acknowledgementQueue struct {
-	items []*Acknowledgement
+type orderedList[T any] struct {
+	front *listElement[T]
+	back  *listElement[T]
+	len   int
 }
 
-func (q *acknowledgementQueue) Push(ack *Acknowledgement) {
-	q.items = append(q.items, ack)
+func (l *orderedList[T]) Len() int {
+	return l.len
 }
 
-func (q *acknowledgementQueue) Pop() (*Acknowledgement, bool) {
-	if len(q.items) == 0 {
-		return nil, false
+func (l *orderedList[T]) Front() *listElement[T] {
+	return l.front
+}
+
+func (l *orderedList[T]) Back() *listElement[T] {
+	return l.back
+}
+
+func (l *orderedList[T]) PushBack(value T) *listElement[T] {
+	elem := &listElement[T]{value: value}
+	if l.back == nil {
+		l.front = elem
+		l.back = elem
+		l.len = 1
+		return elem
 	}
 
-	ack := q.items[0]
-	q.items[0] = nil
-	q.items = q.items[1:]
-	return ack, true
+	elem.prev = l.back
+	l.back.next = elem
+	l.back = elem
+	l.len++
+	return elem
 }
 
-func (q *acknowledgementQueue) Len() int {
-	return len(q.items)
+func (l *orderedList[T]) InsertBefore(mark *listElement[T], value T) *listElement[T] {
+	if mark == nil {
+		return l.PushBack(value)
+	}
+
+	elem := &listElement[T]{
+		value: value,
+		prev:  mark.prev,
+		next:  mark,
+	}
+	if mark.prev != nil {
+		mark.prev.next = elem
+	} else {
+		l.front = elem
+	}
+	mark.prev = elem
+	l.len++
+	return elem
 }
+
+func (l *orderedList[T]) InsertOrdered(value T, less func(a, b T) bool) *listElement[T] {
+	for elem := l.front; elem != nil; elem = elem.next {
+		if less(value, elem.value) {
+			return l.InsertBefore(elem, value)
+		}
+	}
+
+	return l.PushBack(value)
+}
+
+func (l *orderedList[T]) Remove(elem *listElement[T]) T {
+	var zero T
+	if elem == nil {
+		return zero
+	}
+
+	if elem.prev != nil {
+		elem.prev.next = elem.next
+	} else {
+		l.front = elem.next
+	}
+	if elem.next != nil {
+		elem.next.prev = elem.prev
+	} else {
+		l.back = elem.prev
+	}
+
+	elem.prev = nil
+	elem.next = nil
+	l.len--
+	return elem.value
+}
+
+type outgoingCommandList = orderedList[*OutgoingCommand]
+type incomingCommandList = orderedList[*IncomingCommand]
+type acknowledgementList = orderedList[*Acknowledgement]
+
+type outgoingQueue = outgoingCommandList
+type incomingQueue = incomingCommandList
+type acknowledgementQueue = acknowledgementList
