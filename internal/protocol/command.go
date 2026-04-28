@@ -71,18 +71,22 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
-func ParseCommand(src []byte) (PacketCommand, int, error) {
+func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 	if len(src) < commandHeaderSize {
-		return nil, 0, fmt.Errorf("protocol command too short: got %d bytes", len(src))
+		return nil, 0, 0, fmt.Errorf("protocol command too short: got %d bytes", len(src))
 	}
+
+	flags := CommandFlag(src[0]) &^ CommandMask
 
 	switch Command(src[0] & byte(CommandMask)) {
 	case CommandAcknowledge:
-		return parseAcknowledge(src)
+		cmd, n, err := parseAcknowledge(src)
+		return cmd, flags, n, err
 	case CommandConnect:
-		return parseConnect(src)
+		cmd, n, err := parseConnect(src)
+		return cmd, flags, n, err
 	default:
-		return nil, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
+		return nil, 0, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
 	}
 }
 
