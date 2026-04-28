@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
@@ -52,6 +54,30 @@ func NewHost(cfg Config) (*Host, error) {
 // Config returns the host configuration snapshot.
 func (h *Host) Config() Config {
 	return h.config
+}
+
+// Connect initiates an outbound ENet-compatible connection.
+func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, error) {
+	if h.closed.Load() {
+		return nil, errHostClosed
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	address, err := coreAddressFromUDPAddr(udpAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := h.engine.Connect(address, channelCount, data)
+	if err != nil {
+		return nil, err
+	}
+
+	return h.wrapPeer(raw), nil
 }
 
 // Service advances the host and returns the next translated public event.
@@ -175,4 +201,10 @@ func durationMillis(timeout time.Duration) uint32 {
 	}
 
 	return uint32(timeout / time.Millisecond)
+}
+
+func coreAddressFromUDPAddr(addr *net.UDPAddr) (core.Address, error) {
+	addrPort := addr.AddrPort()
+	addrPort = netip.AddrPortFrom(addrPort.Addr().Unmap(), addrPort.Port())
+	return core.NewAddress(addrPort, 0)
 }

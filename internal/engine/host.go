@@ -14,6 +14,7 @@ const (
 	defaultBandwidthThrottleInterval  uint32 = 1000
 	defaultRoundTripTimeout           uint32 = 500
 	defaultPacketThrottle             uint32 = 32
+	peerWindowSizeScale               uint32 = 64 * 1024
 	packetThrottleScale               uint32 = 32
 	packetThrottleCounter             uint32 = 7
 	defaultPacketThrottleAcceleration uint32 = 2
@@ -40,6 +41,7 @@ type Host struct {
 	dispatchQ                  []*peer.Peer
 	runtime                    map[*peer.Peer]*peerRuntime
 	intercepted                *Event
+	nextConnectID              uint32
 }
 
 func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
@@ -120,6 +122,68 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	return h.queueOutgoingCommand(p, channelID, packet)
 }
 
+func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*peer.Peer, error) {
+	requestedChannels := clampUint32(uint32(channelCount), protocol.MinimumChannelCount, protocol.MaximumChannelCount)
+	if h.config.ChannelLimit != 0 && requestedChannels > uint32(h.config.ChannelLimit) {
+		requestedChannels = uint32(h.config.ChannelLimit)
+	}
+
+	var (
+		p     *peer.Peer
+		index int
+	)
+	for i, candidate := range h.peers {
+		if candidate != nil && candidate.State == core.PeerStateDisconnected {
+			p = candidate
+			index = i
+			break
+		}
+	}
+	if p == nil {
+		return nil, fmt.Errorf("engine: no disconnected peers available")
+	}
+
+	p = h.configurePeer(p, index, addr, core.PeerStateConnecting)
+	p.Channels = make([]peer.Channel, requestedChannels)
+	for i := range p.Channels {
+		p.Channels[i] = peer.NewChannel()
+	}
+	p.Address = addr
+	p.ConnectID = h.nextPeerConnectID()
+
+	runtime := h.runtime[p]
+	runtime.windowSize = h.outboundWindowSize()
+
+	connect := &protocol.Connect{
+		OutgoingPeerID:             p.IncomingPeerID,
+		IncomingSessionID:          p.IncomingSessionID,
+		OutgoingSessionID:          p.OutgoingSessionID,
+		MTU:                        p.MTU,
+		WindowSize:                 runtime.windowSize,
+		ChannelCount:               requestedChannels,
+		IncomingBandwidth:          h.incomingBandwidth,
+		OutgoingBandwidth:          h.outgoingBandwidth,
+		PacketThrottleInterval:     p.PacketThrottleInterval,
+		PacketThrottleAcceleration: p.PacketThrottleAcceleration,
+		PacketThrottleDeceleration: p.PacketThrottleDeceleration,
+		ConnectID:                  p.ConnectID,
+		Data:                       data,
+	}
+
+	if err := h.queueOutgoingControlCommand(p, peer.Command{
+		Header: peer.Header{
+			Command:   protocol.CommandConnect,
+			ChannelID: 0xFF,
+			Flags:     protocol.CommandFlagAcknowledge,
+		},
+		Payload: connect,
+	}); err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
 func (h *Host) newPeerSlot(index int) *peer.Peer {
 	p := &peer.Peer{}
 	h.initializePeer(p, index, core.Address{}, core.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
@@ -177,6 +241,24 @@ func (h *Host) initializePeer(
 		LastRoundTripTimeVariance:    0,
 		HighestRoundTripTimeVariance: 0,
 	}
+}
+
+func (h *Host) nextPeerConnectID() uint32 {
+	h.nextConnectID++
+	if h.nextConnectID == 0 {
+		h.nextConnectID = 1
+	}
+
+	return h.nextConnectID
+}
+
+func (h *Host) outboundWindowSize() uint32 {
+	if h.outgoingBandwidth == 0 {
+		return protocol.MaximumWindowSize
+	}
+
+	windowSize := (h.outgoingBandwidth / peerWindowSizeScale) * protocol.MinimumWindowSize
+	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
 }
 
 func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) {
