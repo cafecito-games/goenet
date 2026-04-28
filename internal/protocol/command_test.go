@@ -37,7 +37,21 @@ func TestConnectCommandMatchesGolden(t *testing.T) {
 		t.Fatalf("command type = %T", cmd)
 	}
 
-	if connect.OutgoingPeerID != 7 || connect.MTU != 1400 || connect.WindowSize != 32768 || connect.ChannelCount != 2 || connect.ConnectID != 0xdeadbeef || connect.Data != 0x10203040 {
+	if connect.ChannelID != 0xff ||
+		connect.ReliableSequenceNumber != 3 ||
+		connect.OutgoingPeerID != 7 ||
+		connect.IncomingSessionID != 1 ||
+		connect.OutgoingSessionID != 2 ||
+		connect.MTU != 1400 ||
+		connect.WindowSize != 32768 ||
+		connect.ChannelCount != 2 ||
+		connect.IncomingBandwidth != 60000 ||
+		connect.OutgoingBandwidth != 30000 ||
+		connect.PacketThrottleInterval != 5000 ||
+		connect.PacketThrottleAcceleration != 2 ||
+		connect.PacketThrottleDeceleration != 3 ||
+		connect.ConnectID != 0xdeadbeef ||
+		connect.Data != 0x10203040 {
 		t.Fatalf("connect mismatch: %+v", connect)
 	}
 

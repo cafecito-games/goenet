@@ -30,3 +30,10 @@ func TestHeaderRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch: %+v != %+v", got, h)
 	}
 }
+
+func TestParseHeaderRejectsTruncatedSentTime(t *testing.T) {
+	_, err := protocol.ParseHeader([]byte{0xa0, 0x07, 0x04})
+	if err == nil {
+		t.Fatal("ParseHeader succeeded on truncated sent-time header")
+	}
+}
