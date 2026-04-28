@@ -1,6 +1,8 @@
 package goenet
 
 import (
+	"fmt"
+
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 )
@@ -35,6 +37,60 @@ func (p *Peer) State() PeerState {
 	}
 
 	return p.state
+}
+
+// Send queues a packet for transmission to the peer.
+func (p *Peer) Send(channelID uint8, packet *Packet) error {
+	if p == nil || p.host == nil || p.raw == nil {
+		return fmt.Errorf("goenet: nil peer")
+	}
+	if p.host.closed.Load() {
+		return errHostClosed
+	}
+
+	return p.host.engine.Send(p.raw, channelID, toCorePacket(packet))
+}
+
+// Disconnect queues a graceful ENet-compatible disconnect request.
+func (p *Peer) Disconnect(data uint32) error {
+	if p == nil || p.host == nil || p.raw == nil {
+		return fmt.Errorf("goenet: nil peer")
+	}
+	if p.host.closed.Load() {
+		return errHostClosed
+	}
+	if err := p.host.engine.Disconnect(p.raw, data); err != nil {
+		return err
+	}
+
+	p.state = fromCorePeerState(p.raw.State)
+	return nil
+}
+
+// DisconnectLater defers disconnect until outbound reliable work drains.
+func (p *Peer) DisconnectLater(data uint32) error {
+	if p == nil || p.host == nil || p.raw == nil {
+		return fmt.Errorf("goenet: nil peer")
+	}
+	if p.host.closed.Load() {
+		return errHostClosed
+	}
+	if err := p.host.engine.DisconnectLater(p.raw, data); err != nil {
+		return err
+	}
+
+	p.state = fromCorePeerState(p.raw.State)
+	return nil
+}
+
+// Reset immediately drops local peer state without a wire notification.
+func (p *Peer) Reset() {
+	if p == nil || p.host == nil || p.raw == nil {
+		return
+	}
+
+	p.host.engine.Reset(p.raw)
+	p.state = fromCorePeerState(p.raw.State)
 }
 
 func toCorePeerState(state PeerState) core.PeerState {

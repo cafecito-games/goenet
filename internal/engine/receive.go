@@ -41,8 +41,9 @@ type Event struct {
 }
 
 type peerRuntime struct {
-	eventData  uint32
-	windowSize uint32
+	eventData       uint32
+	windowSize      uint32
+	disconnectLater bool
 }
 
 func defaultPeerRuntime() *peerRuntime {
@@ -494,6 +495,10 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 			return false
 		}
 		h.notifyConnect(p)
+	} else if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
+		if err := h.Disconnect(p, h.runtime[p].eventData); err != nil {
+			return false
+		}
 	}
 
 	return true

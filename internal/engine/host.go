@@ -109,7 +109,7 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if packet == nil {
 		return fmt.Errorf("engine: nil packet")
 	}
-	if p.State != core.PeerStateConnected {
+	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
 		return fmt.Errorf("engine: peer not connected")
 	}
 	if int(channelID) >= len(p.Channels) {
@@ -120,6 +120,62 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	}
 
 	return h.queueOutgoingCommand(p, channelID, packet)
+}
+
+func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
+	if p == nil {
+		return fmt.Errorf("engine: nil peer")
+	}
+	if p.State == core.PeerStateDisconnecting ||
+		p.State == core.PeerStateDisconnected ||
+		p.State == core.PeerStateAcknowledgingDisconnect ||
+		p.State == core.PeerStateZombie {
+		return nil
+	}
+	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
+		return fmt.Errorf("engine: peer not connected")
+	}
+
+	h.clearPeerQueues(p)
+	if err := h.queueOutgoingControlCommand(p, peer.Command{
+		Header: peer.Header{
+			Command:   protocol.CommandDisconnect,
+			ChannelID: 0xFF,
+			Flags:     protocol.CommandFlagAcknowledge,
+		},
+		Payload: &protocol.Disconnect{
+			Data: data,
+		},
+	}); err != nil {
+		return err
+	}
+
+	h.runtime[p].eventData = data
+	h.runtime[p].disconnectLater = false
+	p.State = core.PeerStateDisconnecting
+	return nil
+}
+
+func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
+	if p == nil {
+		return fmt.Errorf("engine: nil peer")
+	}
+	if (p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater) && h.hasOutgoingCommands(p) {
+		h.runtime[p].eventData = data
+		h.runtime[p].disconnectLater = true
+		p.State = core.PeerStateDisconnectLater
+		return nil
+	}
+
+	return h.Disconnect(p, data)
+}
+
+func (h *Host) Reset(p *peer.Peer) {
+	if p == nil {
+		return
+	}
+
+	h.resetPeer(p)
 }
 
 func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*peer.Peer, error) {
@@ -259,6 +315,10 @@ func (h *Host) outboundWindowSize() uint32 {
 
 	windowSize := (h.outgoingBandwidth / peerWindowSizeScale) * protocol.MinimumWindowSize
 	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+}
+
+func (h *Host) hasOutgoingCommands(p *peer.Peer) bool {
+	return p.OutgoingCommands.Len() > 0 || p.OutgoingSendReliableCommands.Len() > 0 || p.SentReliableCommands.Len() > 0
 }
 
 func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) {

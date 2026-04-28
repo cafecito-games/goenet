@@ -282,13 +282,269 @@ func TestConnectReusesStablePeerHandleWhenVerifyConnectArrives(t *testing.T) {
 	}
 }
 
+func TestPeerSendQueuesOutboundPayloadAndFlushes(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	if err := peer.Send(0, &Packet{Data: []byte("ping"), Flags: PacketFlagReliable}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sock.WriteCount(); got != baselineWrites {
+		t.Fatalf("writes before send flush = %d, want %d", got, baselineWrites)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := sock.MustWrite(t, baselineWrites)
+	if got := write.Addr.String(); got != "127.0.0.1:9001" {
+		t.Fatalf("write addr = %q, want %q", got, "127.0.0.1:9001")
+	}
+
+	header, command := mustSingleCommand(t, write.Payload)
+	if header.Flags != protocol.HeaderFlagSentTime {
+		t.Fatalf("header flags = 0x%04x, want 0x%04x", header.Flags, protocol.HeaderFlagSentTime)
+	}
+
+	payload, ok := command.(protocol.SendReliable)
+	if !ok {
+		t.Fatalf("payload command type = %T", command)
+	}
+	if payload.Header.ChannelID != 0 {
+		t.Fatalf("channel id = %d, want 0", payload.Header.ChannelID)
+	}
+	if string(payload.Data) != "ping" {
+		t.Fatalf("payload data = %q, want %q", payload.Data, "ping")
+	}
+}
+
+func TestPeerDisconnectQueuesDisconnectCommand(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	if err := peer.Disconnect(9); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.State(); got != PeerStateDisconnecting {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnecting)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := sock.MustWrite(t, baselineWrites)
+	header, command := mustSingleCommand(t, write.Payload)
+	if header.Flags != protocol.HeaderFlagSentTime {
+		t.Fatalf("header flags = 0x%04x, want 0x%04x", header.Flags, protocol.HeaderFlagSentTime)
+	}
+
+	disconnect, ok := command.(protocol.Disconnect)
+	if !ok {
+		t.Fatalf("disconnect command type = %T", command)
+	}
+	if disconnect.Header.ChannelID != 0xFF {
+		t.Fatalf("disconnect channel id = %d, want 255", disconnect.Header.ChannelID)
+	}
+	if disconnect.Header.Flags != protocol.CommandFlagAcknowledge {
+		t.Fatalf("disconnect flags = 0x%02x, want 0x%02x", disconnect.Header.Flags, protocol.CommandFlagAcknowledge)
+	}
+	if disconnect.Data != 9 {
+		t.Fatalf("disconnect data = %d, want 9", disconnect.Data)
+	}
+}
+
+func TestPeerDisconnectLaterQueuesDisconnectAfterPendingReliableAck(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	if err := peer.Send(0, &Packet{Data: []byte("queued"), Flags: PacketFlagReliable}); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.DisconnectLater(17); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.State(); got != PeerStateDisconnectLater {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnectLater)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sendHeader, sendCommand := mustSingleCommand(t, sock.MustWrite(t, baselineWrites).Payload)
+	sendReliable, ok := sendCommand.(protocol.SendReliable)
+	if !ok {
+		t.Fatalf("queued command type = %T", sendCommand)
+	}
+
+	sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), marshalDatagram(
+		protocol.Header{
+			PeerID:    peer.raw.IncomingPeerID,
+			SessionID: peer.raw.IncomingSessionID,
+		},
+		protocol.Acknowledge{
+			Header: protocol.CommandHeader{
+				ChannelID:              sendReliable.Header.ChannelID,
+				ReliableSequenceNumber: 2,
+			},
+			ReceivedReliableSequenceNumber: sendReliable.Header.ReliableSequenceNumber,
+			ReceivedSentTime:               sendHeader.SentTime,
+		},
+	))
+
+	event, err := host.Service(context.Background(), time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != EventNone {
+		t.Fatalf("event type = %d, want %d", event.Type, EventNone)
+	}
+
+	disconnectWrite := sock.MustWrite(t, baselineWrites+1)
+	_, command := mustSingleCommand(t, disconnectWrite.Payload)
+	disconnect, ok := command.(protocol.Disconnect)
+	if !ok {
+		t.Fatalf("disconnect command type = %T", command)
+	}
+	if disconnect.Data != 17 {
+		t.Fatalf("disconnect data = %d, want 17", disconnect.Data)
+	}
+}
+
+func TestPeerResetInvalidatesStateLocally(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	peer.Reset()
+
+	if got := peer.State(); got != PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
+	}
+	if err := peer.Send(0, &Packet{Data: []byte("after reset"), Flags: PacketFlagReliable}); err == nil {
+		t.Fatal("expected send after reset to fail")
+	}
+	if got := sock.WriteCount(); got != baselineWrites {
+		t.Fatalf("writes after reset = %d, want %d", got, baselineWrites)
+	}
+}
+
+func TestBroadcastFansOutToConnectedPeersOnly(t *testing.T) {
+	host, sock := newConfiguredTestHost(Config{PeerCount: 2, ChannelLimit: 1})
+	connected := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+	connecting, err := host.Connect("127.0.0.1:9002", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	baselineWrites := sock.WriteCount()
+	if got := connecting.State(); got != PeerStateConnecting {
+		t.Fatalf("connecting peer state = %d, want %d", got, PeerStateConnecting)
+	}
+
+	if err := host.Broadcast(0, &Packet{Data: []byte("fanout"), Flags: PacketFlagReliable}); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sock.WriteCount(); got != baselineWrites+1 {
+		t.Fatalf("write count = %d, want %d", got, baselineWrites+1)
+	}
+
+	write := sock.MustWrite(t, baselineWrites)
+	if got := write.Addr.String(); got != "127.0.0.1:9001" {
+		t.Fatalf("broadcast addr = %q, want %q", got, "127.0.0.1:9001")
+	}
+
+	_, command := mustSingleCommand(t, write.Payload)
+	payload, ok := command.(protocol.SendReliable)
+	if !ok {
+		t.Fatalf("broadcast command type = %T", command)
+	}
+	if string(payload.Data) != "fanout" {
+		t.Fatalf("broadcast payload = %q, want %q", payload.Data, "fanout")
+	}
+	if connected.State() != PeerStateConnected {
+		t.Fatalf("connected peer state = %d, want %d", connected.State(), PeerStateConnected)
+	}
+}
+
 func newTestHost() (*Host, *testsupport.FakeSocket) {
-	cfg := DefaultConfig()
-	cfg.PeerCount = 1
-	cfg.ChannelLimit = 1
+	return newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+}
+
+func newConfiguredTestHost(cfg Config) (*Host, *testsupport.FakeSocket) {
+	normalized := DefaultConfig()
+	if cfg.PeerCount != 0 {
+		normalized.PeerCount = cfg.PeerCount
+	}
+	if cfg.ChannelLimit != 0 {
+		normalized.ChannelLimit = cfg.ChannelLimit
+	}
 
 	sock := testsupport.NewFakeSocket()
-	return newHostWithSocket(cfg, sock), sock
+	return newHostWithSocket(normalized, sock), sock
+}
+
+func mustConnectAndVerifyPeer(t *testing.T, host *Host, sock *testsupport.FakeSocket, addr string, data uint32) *Peer {
+	t.Helper()
+
+	peer, err := host.Connect(addr, 1, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sock.QueueInbound(netip.MustParseAddrPort(addr), marshalDatagram(
+		protocol.Header{
+			PeerID:    peer.raw.IncomingPeerID,
+			SessionID: 0,
+			Flags:     protocol.HeaderFlagSentTime,
+			SentTime:  0x3344,
+		},
+		protocol.VerifyConnect{
+			Header: protocol.CommandHeader{
+				ChannelID:              0xFF,
+				ReliableSequenceNumber: 1,
+			},
+			OutgoingPeerID:             33,
+			IncomingSessionID:          2,
+			OutgoingSessionID:          3,
+			MTU:                        1200,
+			WindowSize:                 32000,
+			ChannelCount:               1,
+			IncomingBandwidth:          64000,
+			OutgoingBandwidth:          32000,
+			PacketThrottleInterval:     5000,
+			PacketThrottleAcceleration: 2,
+			PacketThrottleDeceleration: 2,
+			ConnectID:                  peer.raw.ConnectID,
+		},
+	))
+
+	event, err := host.Service(context.Background(), time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != EventConnect {
+		t.Fatalf("event type = %d, want %d", event.Type, EventConnect)
+	}
+	if event.Peer != peer {
+		t.Fatal("connect event did not reuse the original peer handle")
+	}
+
+	return peer
 }
 
 func marshalDatagram(header protocol.Header, commands ...protocol.PacketCommand) []byte {

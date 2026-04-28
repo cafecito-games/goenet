@@ -103,6 +103,28 @@ func (h *Host) Flush(ctx context.Context) error {
 	return h.engine.Flush(ctx)
 }
 
+// Broadcast queues a packet to all currently connected peers.
+func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
+	if h.closed.Load() {
+		return errHostClosed
+	}
+
+	corePacket := toCorePacket(packet)
+	for _, wrapped := range h.peers {
+		if wrapped == nil || wrapped.raw == nil {
+			continue
+		}
+		if wrapped.raw.State != core.PeerStateConnected {
+			continue
+		}
+		if err := h.engine.Send(wrapped.raw, channelID, corePacket); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Close releases the underlying UDP socket.
 func (h *Host) Close() error {
 	if !h.closed.CompareAndSwap(false, true) {
