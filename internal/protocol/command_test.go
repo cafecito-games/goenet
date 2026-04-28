@@ -252,8 +252,11 @@ func TestParseCommandRejectsTruncatedPayloads(t *testing.T) {
 		{name: "disconnect", wire: []byte{0x84, 0xff, 0x00, 0x0b, 0xaa}},
 		{name: "send reliable", wire: []byte{0x86, 0x02, 0x00, 0x0d, 0x00}},
 		{name: "send unreliable", wire: []byte{0x07, 0x03, 0x00, 0x0e, 0x00, 0x04, 0x00}},
+		{name: "send unsequenced", wire: []byte{0x49, 0x05, 0x00, 0x11, 0x00, 0x2a, 0x00}},
 		{name: "send fragment", wire: []byte{0x88, 0x01, 0x00, 0x0f, 0x00, 0x0a}},
 		{name: "send unreliable fragment", wire: []byte{0x0c, 0x04, 0x00, 0x10, 0x00, 0x07}},
+		{name: "bandwidth limit", wire: []byte{0x0a, 0xff, 0x00, 0x12, 0x00, 0x00, 0x01}},
+		{name: "throttle configure", wire: []byte{0x0b, 0xff, 0x00, 0x13, 0x00, 0x00, 0x13}},
 	}
 
 	for _, tt := range tests {
@@ -261,6 +264,84 @@ func TestParseCommandRejectsTruncatedPayloads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, _, _, err := protocol.ParseCommand(tt.wire); err == nil {
 				t.Fatal("ParseCommand succeeded on truncated input")
+			}
+		})
+	}
+}
+
+func TestAdditionalCommandRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		wire  []byte
+		flags protocol.CommandFlag
+		want  protocol.PacketCommand
+	}{
+		{
+			name:  "send unsequenced",
+			wire:  []byte{0x49, 0x05, 0x00, 0x11, 0x00, 0x2a, 0x00, 0x03, 'o', 'n', 'e'},
+			flags: protocol.CommandFlagUnsequenced,
+			want: protocol.SendUnsequenced{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandSendUnsequenced,
+					ChannelID:              0x05,
+					Flags:                  protocol.CommandFlagUnsequenced,
+					ReliableSequenceNumber: 17,
+				},
+				UnsequencedGroup: 42,
+				Data:             []byte("one"),
+			},
+		},
+		{
+			name:  "bandwidth limit",
+			wire:  []byte{0x0a, 0xff, 0x00, 0x12, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x08, 0x00},
+			flags: 0,
+			want: protocol.BandwidthLimit{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandBandwidthLimit,
+					ChannelID:              0xff,
+					ReliableSequenceNumber: 18,
+				},
+				IncomingBandwidth: 1024,
+				OutgoingBandwidth: 2048,
+			},
+		},
+		{
+			name:  "throttle configure",
+			wire:  []byte{0x0b, 0xff, 0x00, 0x13, 0x00, 0x00, 0x13, 0x88, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03},
+			flags: 0,
+			want: protocol.ThrottleConfigure{
+				Header: protocol.CommandHeader{
+					Command:                protocol.CommandThrottleConfigure,
+					ChannelID:              0xff,
+					ReliableSequenceNumber: 19,
+				},
+				PacketThrottleInterval:     5000,
+				PacketThrottleAcceleration: 2,
+				PacketThrottleDeceleration: 3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, flags, n, err := protocol.ParseCommand(tt.wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if flags != tt.flags {
+				t.Fatalf("flags = 0x%02x, want 0x%02x", flags, tt.flags)
+			}
+			if n != len(tt.wire) {
+				t.Fatalf("consumed = %d, want %d", n, len(tt.wire))
+			}
+			if !reflect.DeepEqual(cmd, tt.want) {
+				t.Fatalf("command mismatch:\n got: %#v\nwant: %#v", cmd, tt.want)
+			}
+			if got := cmd.MarshalBinary(nil); !bytes.Equal(got, tt.wire) {
+				t.Fatalf("marshal mismatch: %x != %x", got, tt.wire)
 			}
 		})
 	}

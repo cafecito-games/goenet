@@ -40,7 +40,22 @@ func TestProtocolConstantsMatchENet(t *testing.T) {
 	if protocol.CommandSendFragment != 8 {
 		t.Fatalf("CommandSendFragment = %d", protocol.CommandSendFragment)
 	}
+	if protocol.CommandSendUnsequenced != 9 {
+		t.Fatalf("CommandSendUnsequenced = %d", protocol.CommandSendUnsequenced)
+	}
+	if protocol.CommandBandwidthLimit != 10 {
+		t.Fatalf("CommandBandwidthLimit = %d", protocol.CommandBandwidthLimit)
+	}
+	if protocol.CommandThrottleConfigure != 11 {
+		t.Fatalf("CommandThrottleConfigure = %d", protocol.CommandThrottleConfigure)
+	}
 	if protocol.CommandSendUnreliableFragment != 12 {
 		t.Fatalf("CommandSendUnreliableFragment = %d", protocol.CommandSendUnreliableFragment)
+	}
+	if protocol.CommandFlagUnsequenced != 1<<6 {
+		t.Fatalf("CommandFlagUnsequenced = 0x%02x", protocol.CommandFlagUnsequenced)
+	}
+	if protocol.CommandFlagAcknowledge != 1<<7 {
+		t.Fatalf("CommandFlagAcknowledge = 0x%02x", protocol.CommandFlagAcknowledge)
 	}
 }

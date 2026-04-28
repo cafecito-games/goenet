@@ -84,6 +84,13 @@ type SendUnreliable struct {
 	Data                     []byte
 }
 
+// SendUnsequenced matches ENetProtocolSendUnsequenced.
+type SendUnsequenced struct {
+	Header           CommandHeader
+	UnsequencedGroup uint16
+	Data             []byte
+}
+
 // SendFragment matches ENetProtocolSendFragment and ENetProtocolSendUnreliableFragment.
 type SendFragment struct {
 	Header              CommandHeader
@@ -93,6 +100,21 @@ type SendFragment struct {
 	TotalLength         uint32
 	FragmentOffset      uint32
 	Data                []byte
+}
+
+// BandwidthLimit matches ENetProtocolBandwidthLimit.
+type BandwidthLimit struct {
+	Header            CommandHeader
+	IncomingBandwidth uint32
+	OutgoingBandwidth uint32
+}
+
+// ThrottleConfigure matches ENetProtocolThrottleConfigure.
+type ThrottleConfigure struct {
+	Header                     CommandHeader
+	PacketThrottleInterval     uint32
+	PacketThrottleAcceleration uint32
+	PacketThrottleDeceleration uint32
 }
 
 func (h CommandHeader) MarshalBinary(dst []byte) []byte {
@@ -221,6 +243,20 @@ func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+func (s SendUnsequenced) MarshalBinary(dst []byte) []byte {
+	header := s.Header
+	header.Command = CommandSendUnsequenced
+	header.Flags |= CommandFlagUnsequenced
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, sendUnsequencedCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], s.UnsequencedGroup)
+	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	dst = append(dst, s.Data...)
+	return dst
+}
+
 func (s SendFragment) MarshalBinary(dst []byte) []byte {
 	header := s.Header
 	if header.Command == 0 {
@@ -240,6 +276,31 @@ func (s SendFragment) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint32(dst[start+16:start+20], s.TotalLength)
 	binary.BigEndian.PutUint32(dst[start+20:start+24], s.FragmentOffset)
 	dst = append(dst, s.Data...)
+	return dst
+}
+
+func (b BandwidthLimit) MarshalBinary(dst []byte) []byte {
+	header := b.Header
+	header.Command = CommandBandwidthLimit
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, bandwidthLimitCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint32(dst[start+4:start+8], b.IncomingBandwidth)
+	binary.BigEndian.PutUint32(dst[start+8:start+12], b.OutgoingBandwidth)
+	return dst
+}
+
+func (t ThrottleConfigure) MarshalBinary(dst []byte) []byte {
+	header := t.Header
+	header.Command = CommandThrottleConfigure
+
+	start := len(dst)
+	dst = header.MarshalBinary(dst)
+	dst = append(dst, make([]byte, throttleConfigureCommandSize-commandHeaderSize)...)
+	binary.BigEndian.PutUint32(dst[start+4:start+8], t.PacketThrottleInterval)
+	binary.BigEndian.PutUint32(dst[start+8:start+12], t.PacketThrottleAcceleration)
+	binary.BigEndian.PutUint32(dst[start+12:start+16], t.PacketThrottleDeceleration)
 	return dst
 }
 
@@ -271,8 +332,17 @@ func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 	case CommandSendUnreliable:
 		cmd, n, err := parseSendUnreliable(header, src)
 		return cmd, header.Flags, n, err
+	case CommandSendUnsequenced:
+		cmd, n, err := parseSendUnsequenced(header, src)
+		return cmd, header.Flags, n, err
 	case CommandSendFragment, CommandSendUnreliableFragment:
 		cmd, n, err := parseSendFragment(header, src)
+		return cmd, header.Flags, n, err
+	case CommandBandwidthLimit:
+		cmd, n, err := parseBandwidthLimit(header, src)
+		return cmd, header.Flags, n, err
+	case CommandThrottleConfigure:
+		cmd, n, err := parseThrottleConfigure(header, src)
 		return cmd, header.Flags, n, err
 	default:
 		return nil, 0, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
@@ -388,6 +458,23 @@ func parseSendUnreliable(header CommandHeader, src []byte) (SendUnreliable, int,
 	}, sendUnreliableCommandSize + dataLength, nil
 }
 
+func parseSendUnsequenced(header CommandHeader, src []byte) (SendUnsequenced, int, error) {
+	if len(src) < sendUnsequencedCommandSize {
+		return SendUnsequenced{}, 0, fmt.Errorf("send unsequenced command too short: got %d bytes", len(src))
+	}
+
+	dataLength := int(binary.BigEndian.Uint16(src[6:8]))
+	if len(src) < sendUnsequencedCommandSize+dataLength {
+		return SendUnsequenced{}, 0, fmt.Errorf("send unsequenced payload too short: got %d bytes", len(src))
+	}
+
+	return SendUnsequenced{
+		Header:           header,
+		UnsequencedGroup: binary.BigEndian.Uint16(src[4:6]),
+		Data:             append([]byte(nil), src[8:8+dataLength]...),
+	}, sendUnsequencedCommandSize + dataLength, nil
+}
+
 func parseSendFragment(header CommandHeader, src []byte) (SendFragment, int, error) {
 	if len(src) < sendFragmentCommandSize {
 		return SendFragment{}, 0, fmt.Errorf("send fragment command too short: got %d bytes", len(src))
@@ -407,4 +494,29 @@ func parseSendFragment(header CommandHeader, src []byte) (SendFragment, int, err
 		FragmentOffset:      binary.BigEndian.Uint32(src[20:24]),
 		Data:                append([]byte(nil), src[24:24+dataLength]...),
 	}, sendFragmentCommandSize + dataLength, nil
+}
+
+func parseBandwidthLimit(header CommandHeader, src []byte) (BandwidthLimit, int, error) {
+	if len(src) < bandwidthLimitCommandSize {
+		return BandwidthLimit{}, 0, fmt.Errorf("bandwidth limit command too short: got %d bytes", len(src))
+	}
+
+	return BandwidthLimit{
+		Header:            header,
+		IncomingBandwidth: binary.BigEndian.Uint32(src[4:8]),
+		OutgoingBandwidth: binary.BigEndian.Uint32(src[8:12]),
+	}, bandwidthLimitCommandSize, nil
+}
+
+func parseThrottleConfigure(header CommandHeader, src []byte) (ThrottleConfigure, int, error) {
+	if len(src) < throttleConfigureCommandSize {
+		return ThrottleConfigure{}, 0, fmt.Errorf("throttle configure command too short: got %d bytes", len(src))
+	}
+
+	return ThrottleConfigure{
+		Header:                     header,
+		PacketThrottleInterval:     binary.BigEndian.Uint32(src[4:8]),
+		PacketThrottleAcceleration: binary.BigEndian.Uint32(src[8:12]),
+		PacketThrottleDeceleration: binary.BigEndian.Uint32(src[12:16]),
+	}, throttleConfigureCommandSize, nil
 }
