@@ -62,16 +62,6 @@ func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
 	return p
 }
 
-func (h *Host) MustConnectedPeer() *peer.Peer {
-	for _, p := range h.peers {
-		if p.State == goenet.PeerStateConnected {
-			return p
-		}
-	}
-
-	panic("engine: no connected peer")
-}
-
 func (h *Host) Send(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")

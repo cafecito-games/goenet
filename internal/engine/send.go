@@ -25,6 +25,11 @@ type outgoingSelection struct {
 	wireSize          int
 }
 
+type preparedDatagram struct {
+	payload  []byte
+	selected []outgoingSelection
+}
+
 type sendReliablePayload struct {
 	channelID              uint8
 	reliableSequenceNumber uint16
@@ -120,7 +125,7 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *goene
 func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
 		for {
-			payload, wroteAny, err := h.flushPeerDatagram(ctx, p)
+			datagram, wroteAny, err := h.preparePeerDatagram(p)
 			if err != nil {
 				return err
 			}
@@ -128,25 +133,25 @@ func (h *Host) Flush(ctx context.Context) error {
 				break
 			}
 
-			n, err := h.socket.WritePacket(ctx, p.Address.AddrPort(), payload)
+			n, err := h.socket.WritePacket(ctx, p.Address.AddrPort(), datagram.payload)
 			if err != nil {
 				return err
 			}
-			if n != len(payload) {
-				return fmt.Errorf("engine: short write: wrote %d of %d", n, len(payload))
+			if n != len(datagram.payload) {
+				return fmt.Errorf("engine: short write: wrote %d of %d", n, len(datagram.payload))
 			}
+
+			h.commitPreparedDatagram(p, datagram)
 		}
 	}
 
 	return nil
 }
 
-func (h *Host) flushPeerDatagram(ctx context.Context, p *peer.Peer) ([]byte, bool, error) {
-	_ = ctx
-
+func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error) {
 	selected := h.selectOutgoingBatch(p)
 	if len(selected) == 0 {
-		return nil, false, nil
+		return preparedDatagram{}, false, nil
 	}
 
 	header := protocol.Header{}
@@ -157,31 +162,31 @@ func (h *Host) flushPeerDatagram(ctx context.Context, p *peer.Peer) ([]byte, boo
 	payload := header.MarshalBinary(nil)
 
 	for _, item := range selected {
-		if item.fromReliableQueue {
-			cmd := p.OutgoingSendReliableCommands.Remove(p.OutgoingSendReliableCommands.Front())
-			if item.requiresAck {
-				markCommandInFlight(cmd, h.serviceTime)
-				payload = cmd.Command.Payload.MarshalBinary(payload)
-				p.SentReliableCommands.PushBack(cmd)
-				continue
-			}
-
-			payload = cmd.Command.Payload.MarshalBinary(payload)
-			continue
-		}
-
-		cmd := p.OutgoingCommands.Remove(p.OutgoingCommands.Front())
-		if item.requiresAck {
-			markCommandInFlight(cmd, h.serviceTime)
-			payload = cmd.Command.Payload.MarshalBinary(payload)
-			p.SentReliableCommands.PushBack(cmd)
-			continue
-		}
-
-		payload = cmd.Command.Payload.MarshalBinary(payload)
+		payload = item.command.Command.Payload.MarshalBinary(payload)
 	}
 
-	return payload, true, nil
+	return preparedDatagram{
+		payload:  payload,
+		selected: selected,
+	}, true, nil
+}
+
+func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
+	for _, item := range datagram.selected {
+		var cmd *peer.OutgoingCommand
+		if item.fromReliableQueue {
+			cmd = p.OutgoingSendReliableCommands.Remove(p.OutgoingSendReliableCommands.Front())
+		} else {
+			cmd = p.OutgoingCommands.Remove(p.OutgoingCommands.Front())
+		}
+
+		if !item.requiresAck {
+			continue
+		}
+
+		markCommandInFlight(cmd, h.serviceTime)
+		p.SentReliableCommands.PushBack(cmd)
+	}
 }
 
 func markCommandInFlight(cmd *peer.OutgoingCommand, serviceTime uint32) {
@@ -264,6 +269,9 @@ func commandWireSize(cmd *peer.OutgoingCommand) int {
 }
 
 func (h *Host) validatePacketSize(packet *goenet.Packet) error {
+	if packet.Flags&goenet.PacketFlagUnsequenced != 0 {
+		return fmt.Errorf("engine: unsequenced packets are not supported in task 5")
+	}
 	if len(packet.Data) > math.MaxUint16 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}

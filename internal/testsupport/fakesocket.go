@@ -15,7 +15,8 @@ type SocketWrite struct {
 
 // FakeSocket is a deterministic socket stub for engine tests.
 type FakeSocket struct {
-	writes []SocketWrite
+	writes   []SocketWrite
+	writeErr error
 }
 
 func NewFakeSocket() *FakeSocket {
@@ -38,6 +39,10 @@ func (s *FakeSocket) WritePacket(ctx context.Context, addr netip.AddrPort, paylo
 	default:
 	}
 
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+
 	copyPayload := append([]byte(nil), payload...)
 	s.writes = append(s.writes, SocketWrite{
 		Addr:    addr,
@@ -52,6 +57,10 @@ func (s *FakeSocket) Close() error {
 
 func (s *FakeSocket) WriteCount() int {
 	return len(s.writes)
+}
+
+func (s *FakeSocket) SetWriteError(err error) {
+	s.writeErr = err
 }
 
 func (s *FakeSocket) MustWrite(t *testing.T, index int) SocketWrite {
