@@ -1,0 +1,93 @@
+package engine
+
+import (
+	"fmt"
+
+	"github.com/cafecito-games/goenet"
+	"github.com/cafecito-games/goenet/internal/peer"
+	"github.com/cafecito-games/goenet/internal/socket"
+)
+
+const defaultRoundTripTimeout uint32 = 500
+
+// Host carries the minimal outbound engine state for queueing and flush tests.
+type Host struct {
+	config      goenet.Config
+	socket      socket.DatagramSocket
+	peers       []*peer.Peer
+	serviceTime uint32
+	totalQueued uint32
+}
+
+func NewHost(config goenet.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
+	cfg := goenet.DefaultConfig()
+	if config.PeerCount != 0 {
+		cfg.PeerCount = config.PeerCount
+	}
+	if config.ChannelLimit != 0 {
+		cfg.ChannelLimit = config.ChannelLimit
+	}
+	if config.MTU != 0 {
+		cfg.MTU = config.MTU
+	}
+	if config.MaximumPacketSize != 0 {
+		cfg.MaximumPacketSize = config.MaximumPacketSize
+	}
+	if config.MaximumWaitingData != 0 {
+		cfg.MaximumWaitingData = config.MaximumWaitingData
+	}
+	if cfg.ChannelLimit == 0 {
+		cfg.ChannelLimit = 1
+	}
+
+	return &Host{
+		config:      cfg,
+		socket:      sock,
+		serviceTime: serviceTime,
+	}
+}
+
+func (h *Host) AddPeer(addr goenet.Address, state goenet.PeerState) *peer.Peer {
+	channels := make([]peer.Channel, h.config.ChannelLimit)
+	for i := range channels {
+		channels[i] = peer.NewChannel()
+	}
+
+	p := &peer.Peer{
+		Address:  addr,
+		State:    state,
+		Channels: channels,
+	}
+	h.peers = append(h.peers, p)
+	return p
+}
+
+func (h *Host) MustConnectedPeer() *peer.Peer {
+	for _, p := range h.peers {
+		if p.State == goenet.PeerStateConnected {
+			return p
+		}
+	}
+
+	panic("engine: no connected peer")
+}
+
+func (h *Host) Send(p *peer.Peer, channelID uint8, packet *goenet.Packet) error {
+	if p == nil {
+		return fmt.Errorf("engine: nil peer")
+	}
+	if packet == nil {
+		return fmt.Errorf("engine: nil packet")
+	}
+	if p.State != goenet.PeerStateConnected {
+		return fmt.Errorf("engine: peer not connected")
+	}
+	if int(channelID) >= len(p.Channels) {
+		return fmt.Errorf("engine: channel %d out of range", channelID)
+	}
+	if len(packet.Data) > int(h.config.MaximumPacketSize) {
+		return fmt.Errorf("engine: packet too large: %d", len(packet.Data))
+	}
+
+	return h.queueOutgoingCommand(p, channelID, packet)
+}
