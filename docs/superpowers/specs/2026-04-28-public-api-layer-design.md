@@ -89,6 +89,8 @@ The exported `goenet` package should present idiomatic Go types and lifecycle wh
 - peer state transitions
 - compatibility with the local ENet fork at `/Users/christian/CafecitoGames/enet`
 
+Because `internal/engine` already consumes shared types currently declared in `goenet`, the implementation must first extract those engine-consumed shared types into an internal core package and make the exported `goenet` types aliases or thin wrappers. Without that step, `goenet.Host` cannot own an `internal/engine.Host` without an import cycle.
+
 ## Public API Shape
 
 The first usable public API should expose:
@@ -112,6 +114,12 @@ The current exported `Event` type remains the public event shape.
 ## Runtime Boundary
 
 `goenet.Host` is the public orchestration layer, not the wire engine.
+
+To make that compile cleanly, the dependency direction must become:
+
+- `internal/core` owns shared transport value types used by both engine and public API
+- `internal/engine` depends on `internal/core`, not `goenet`
+- `goenet` depends on `internal/core` and `internal/engine`
 
 Responsibilities of `goenet.Host`:
 
