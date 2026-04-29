@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"net/netip"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -108,9 +107,9 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 	return nil
 }
 
-func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error {
+func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	if h.config.Intercept != nil {
-		decision, err := h.config.Intercept.Intercept(addr, payload)
+		decision, err := h.config.Intercept.Intercept(addr.AddrPort(), payload)
 		if err != nil {
 			return err
 		}
@@ -215,7 +214,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 	return nil
 }
 
-func (h *Host) lookupPeer(header protocol.Header, addr netip.AddrPort) (*peer.Peer, bool) {
+func (h *Host) lookupPeer(header protocol.Header, addr core.Address) (*peer.Peer, bool) {
 	if header.PeerID == protocol.MaximumPeerID {
 		return nil, true
 	}
@@ -230,7 +229,7 @@ func (h *Host) lookupPeer(header protocol.Header, addr netip.AddrPort) (*peer.Pe
 	if candidate.State == core.PeerStateDisconnected || candidate.State == core.PeerStateZombie {
 		return nil, false
 	}
-	if candidate.Address.AddrPort() != addr {
+	if candidate.Address != addr {
 		return nil, false
 	}
 	if candidate.OutgoingPeerID < protocol.MaximumPeerID && header.SessionID != candidate.IncomingSessionID {
@@ -244,7 +243,7 @@ func (h *Host) handleIncomingCommand(
 	packetHeader protocol.Header,
 	currentPeer **peer.Peer,
 	command protocol.PacketCommand,
-	addr netip.AddrPort,
+	addr core.Address,
 ) inboundDisposition {
 	switch cmd := command.(type) {
 	case protocol.Acknowledge:
@@ -325,7 +324,7 @@ func (h *Host) handleIncomingCommand(
 	}
 }
 
-func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *peer.Peer {
+func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.Peer {
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
 		return nil
 	}
@@ -341,17 +340,12 @@ func (h *Host) handleConnect(addr netip.AddrPort, command protocol.Connect) *pee
 		return nil
 	}
 
-	address, err := core.NewAddress(addr, 0)
-	if err != nil {
-		return nil
-	}
-
 	channelCount := command.ChannelCount
 	if channelCount > uint32(h.config.ChannelLimit) {
 		channelCount = uint32(h.config.ChannelLimit)
 	}
 
-	selected.Address = address
+	selected.Address = addr
 	selected.State = core.PeerStateAcknowledgingConnect
 	selected.ConnectID = command.ConnectID
 	selected.OutgoingPeerID = command.OutgoingPeerID

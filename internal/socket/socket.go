@@ -3,12 +3,13 @@ package socket
 
 import (
 	"context"
-	"net/netip"
+
+	"github.com/cafecito-games/goenet/internal/core"
 )
 
 // DatagramSocket is the narrow packet I/O surface the engine needs.
 type DatagramSocket interface {
-	ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, error)
-	WritePacket(ctx context.Context, addr netip.AddrPort, payload []byte) (int, error)
+	ReadPacket(ctx context.Context, buf []byte) (int, core.Address, error)
+	WritePacket(ctx context.Context, addr core.Address, payload []byte) (int, error)
 	Close() error
 }

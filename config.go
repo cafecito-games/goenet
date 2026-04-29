@@ -16,22 +16,7 @@ type Config struct {
 
 // DefaultConfig returns ENet-compatible host defaults.
 func DefaultConfig() Config {
-	coreCfg := core.DefaultConfig()
-	cfg := Config{
-		PeerCount:          coreCfg.PeerCount,
-		ChannelLimit:       coreCfg.ChannelLimit,
-		MTU:                coreCfg.MTU,
-		MaximumPacketSize:  coreCfg.MaximumPacketSize,
-		MaximumWaitingData: coreCfg.MaximumWaitingData,
-	}
-	if coreCfg.Checksum != nil {
-		cfg.Checksum = coreChecksummerAdapter{inner: coreCfg.Checksum}
-	}
-	if coreCfg.Compressor != nil {
-		cfg.Compressor = coreCompressorAdapter{inner: coreCfg.Compressor}
-	}
-
-	return cfg
+	return fromCoreConfig(core.DefaultConfig())
 }
 
 func toCoreConfig(cfg Config) core.Config {
@@ -62,4 +47,14 @@ func toCoreConfig(cfg Config) core.Config {
 	}
 
 	return coreCfg
+}
+
+func fromCoreConfig(cfg core.Config) Config {
+	return Config{
+		PeerCount:          cfg.PeerCount,
+		ChannelLimit:       cfg.ChannelLimit,
+		MTU:                cfg.MTU,
+		MaximumPacketSize:  cfg.MaximumPacketSize,
+		MaximumWaitingData: cfg.MaximumWaitingData,
+	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 	"github.com/cafecito-games/goenet/internal/peer"
+	isocket "github.com/cafecito-games/goenet/internal/socket"
 )
 
 type interopConfig struct {
@@ -505,35 +506,39 @@ func (s *udpSocket) LocalAddr() netip.AddrPort {
 	return s.conn.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
-func (s *udpSocket) ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, error) {
+func (s *udpSocket) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, error) {
 	deadline := time.Now().Add(20 * time.Millisecond)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 	if err := s.conn.SetReadDeadline(deadline); err != nil {
-		return 0, netip.AddrPort{}, err
+		return 0, core.Address{}, err
 	}
 
 	n, addr, err := s.conn.ReadFromUDPAddrPort(buf)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			return 0, netip.AddrPort{}, io.EOF
+			return 0, core.Address{}, io.EOF
 		}
-		return 0, netip.AddrPort{}, err
+		return 0, core.Address{}, err
 	}
 
-	return n, addr, nil
+	coreAddr, err := isocket.AddressFromAddrPort(addr)
+	if err != nil {
+		return 0, core.Address{}, err
+	}
+	return n, coreAddr, nil
 }
 
-func (s *udpSocket) WritePacket(ctx context.Context, addr netip.AddrPort, payload []byte) (int, error) {
+func (s *udpSocket) WritePacket(ctx context.Context, addr core.Address, payload []byte) (int, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := s.conn.SetWriteDeadline(deadline); err != nil {
 			return 0, err
 		}
 	}
 
-	return s.conn.WriteToUDPAddrPort(payload, addr)
+	return s.conn.WriteToUDP(payload, isocket.UDPAddrFromAddress(addr))
 }
 
 func (s *udpSocket) Close() error {
