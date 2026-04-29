@@ -47,6 +47,7 @@ type Host struct {
 	nextConnectID              uint32
 }
 
+// NewHost constructs an engine host around the provided socket and config snapshot.
 func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32) *Host {
 	cfg := core.DefaultConfig()
 	if config.PeerCount != 0 {
@@ -91,6 +92,7 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	return host
 }
 
+// AddPeer reserves or extends a peer slot with the provided address and state.
 func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 	for index, candidate := range h.peers {
 		if candidate != nil && candidate.State == core.PeerStateDisconnected {
@@ -105,6 +107,7 @@ func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 	return p
 }
 
+// Send queues one outbound packet for a connected peer channel.
 func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
@@ -125,6 +128,7 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	return h.queueOutgoingCommand(p, channelID, packet)
 }
 
+// Disconnect follows ENet's graceful or handshake-state disconnect path for p.
 func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
@@ -158,6 +162,7 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 	return nil
 }
 
+// DisconnectNow force-flushes an unsequenced disconnect and resets the peer locally.
 func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
@@ -211,6 +216,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 	return nil
 }
 
+// DisconnectLater defers disconnect until the peer's outbound reliable work drains.
 func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
@@ -225,6 +231,7 @@ func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
 	return h.Disconnect(p, data)
 }
 
+// Reset immediately drops all local state for p without a wire notification.
 func (h *Host) Reset(p *peer.Peer) {
 	if p == nil {
 		return
@@ -233,6 +240,7 @@ func (h *Host) Reset(p *peer.Peer) {
 	h.resetPeer(p)
 }
 
+// Connect allocates an outbound peer and queues an ENet connect command.
 func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*peer.Peer, error) {
 	requestedChannels := clampUint32(uint32(channelCount), protocol.MinimumChannelCount, protocol.MaximumChannelCount)
 	if h.config.ChannelLimit != 0 && requestedChannels > uint32(h.config.ChannelLimit) {
@@ -402,6 +410,7 @@ func (h *Host) hasOutgoingCommands(p *peer.Peer) bool {
 	return p.OutgoingCommands.Len() > 0 || p.OutgoingSendReliableCommands.Len() > 0 || p.SentReliableCommands.Len() > 0
 }
 
+// BandwidthLimit updates the host bandwidth caps and schedules peer recomputation.
 func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) {
 	h.incomingBandwidth = incomingBandwidth
 	h.outgoingBandwidth = outgoingBandwidth

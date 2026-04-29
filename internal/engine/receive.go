@@ -32,6 +32,7 @@ const (
 	inboundAccept
 )
 
+// Event is the engine-level service event before public API translation.
 type Event struct {
 	Type      core.EventType
 	Peer      *peer.Peer
@@ -52,6 +53,7 @@ func defaultPeerRuntime() *peerRuntime {
 	}
 }
 
+// Service advances the engine state machine and returns the next visible event.
 func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 	if h.intercepted != nil {
 		event := *h.intercepted

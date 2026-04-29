@@ -45,6 +45,7 @@ func (p *sendReliablePayload) setOutgoingSequenceNumbers(reliable, _ uint16) {
 	p.reliableSequenceNumber = reliable
 }
 
+// MarshalBinary appends the reliable payload wire encoding to dst.
 func (p *sendReliablePayload) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, 6+len(p.data))...)
@@ -68,6 +69,7 @@ func (p *sendUnreliablePayload) setOutgoingSequenceNumbers(reliable, unreliable 
 	p.unreliableSequenceNumber = unreliable
 }
 
+// MarshalBinary appends the unreliable payload wire encoding to dst.
 func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, 8+len(p.data))...)
@@ -122,6 +124,7 @@ func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) e
 	return h.setupAndQueueOutgoingCommand(p, &peer.OutgoingCommand{Command: command})
 }
 
+// Flush serializes and writes all currently queued outbound peer traffic.
 func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
 		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
