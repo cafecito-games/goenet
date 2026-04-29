@@ -2,6 +2,7 @@ package goenet
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -83,6 +84,34 @@ func TestNewHostExposesBoundLocalAddr(t *testing.T) {
 	}
 	if addr.Port == 0 {
 		t.Fatal("expected non-zero bound port")
+	}
+}
+
+func TestLocalAddrPortMatchesBoundUDPAddr(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{PeerCount: 1, ChannelLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	addr, ok := host.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("local addr type = %T, want *net.UDPAddr", host.LocalAddr())
+	}
+
+	got := host.LocalAddrPort()
+	if !got.IsValid() {
+		t.Fatal("LocalAddrPort() returned invalid address")
+	}
+	if got.Port() != uint16(addr.Port) {
+		t.Fatalf("LocalAddrPort().Port() = %d, want %d", got.Port(), addr.Port)
+	}
+	if !got.Addr().IsLoopback() {
+		t.Fatalf("LocalAddrPort().Addr() = %v, want loopback", got.Addr())
 	}
 }
 
@@ -603,6 +632,51 @@ func TestPeerResetInvalidatesStateLocally(t *testing.T) {
 	}
 	if got := sock.WriteCount(); got != baselineWrites {
 		t.Fatalf("writes after reset = %d, want %d", got, baselineWrites)
+	}
+}
+
+func TestDisconnectedPeerHandleStaysInvalidAfterSlotReuse(t *testing.T) {
+	host, sock := newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+	first := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11111111)
+
+	sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), marshalDatagram(
+		protocol.Header{
+			PeerID:    first.raw.IncomingPeerID,
+			SessionID: first.raw.IncomingSessionID,
+			Flags:     protocol.HeaderFlagSentTime,
+			SentTime:  0x5050,
+		},
+		protocol.Disconnect{
+			Header: protocol.CommandHeader{
+				ChannelID:              0xFF,
+				Flags:                  protocol.CommandFlagAcknowledge,
+				ReliableSequenceNumber: 2,
+			},
+			Data: 0xABCD1234,
+		},
+	))
+
+	event, err := host.Service(context.Background(), time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != EventDisconnect {
+		t.Fatalf("disconnect event type = %d, want %d", event.Type, EventDisconnect)
+	}
+	if event.Peer != first {
+		t.Fatal("disconnect event did not use original peer handle")
+	}
+
+	second := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9002", 0x22222222)
+	if second == first {
+		t.Fatal("reused slot should produce a fresh public peer handle")
+	}
+
+	if got := first.State(); got != PeerStateDisconnected {
+		t.Fatalf("stale peer state = %d, want %d", got, PeerStateDisconnected)
+	}
+	if err := first.Send(0, &Packet{Data: []byte("stale"), Flags: PacketFlagReliable}); !errors.Is(err, ErrNilPeer) {
+		t.Fatalf("stale peer Send() error = %v, want %v", err, ErrNilPeer)
 	}
 }
 
