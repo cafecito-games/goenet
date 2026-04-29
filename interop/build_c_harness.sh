@@ -2,12 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-git_common_dir="$(git -C "$script_dir" rev-parse --git-common-dir)"
-if [[ "$git_common_dir" != /* ]]; then
-  git_common_dir="$(cd "$script_dir/$git_common_dir" && pwd)"
-fi
-repo_root="$(cd "$git_common_dir/.." && pwd)"
-default_enet_root="$(cd "$repo_root/.." && pwd)/enet"
+default_enet_root="$script_dir/vendor"
 enet_root="${ENET_SOURCE_DIR:-$default_enet_root}"
 output="${1:-$script_dir/enet-harness}"
 

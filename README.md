@@ -10,7 +10,7 @@
 
 ## Compatibility Target
 
-`goenet` is developed against a local ENet fork checkout. Interoperability checks in [`interop/`](./interop) build and exercise that fork directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness looks for a sibling `../enet` checkout by default, or uses `ENET_SOURCE_DIR` when set.
+`goenet` is developed against an ENet fork snapshot vendored for interop checks in [`interop/vendor`](./interop/vendor). Interoperability checks in [`interop/`](./interop) build and exercise that source directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness uses that vendored source by default, or `ENET_SOURCE_DIR` when set.
 
 ## Installation
 
