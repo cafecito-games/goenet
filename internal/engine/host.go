@@ -108,11 +108,6 @@ func (h *Host) SetServiceTime(t uint32) {
 	h.serviceTime = t
 }
 
-// ServiceTime returns the engine's current millisecond clock (primarily for tests).
-func (h *Host) ServiceTime() uint32 {
-	return h.serviceTime
-}
-
 // AddPeer reserves or extends a peer slot with the provided address and state.
 //
 // AddPeer is exposed only as a test-construction helper so harnesses can bypass

@@ -53,7 +53,7 @@ func TestAddressString(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 	b := mustAddress(t, "[fe80::1]:1234", 7)
-	if got, want := b.String(), "[fe80::1]:1234%7"; got != want {
+	if got, want := b.String(), "[fe80::1%7]:1234"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }

@@ -334,6 +334,10 @@ func (h *Host) translateEvent(event engine.Event) Event {
 	// future re-use of the same engine peer slot allocates a fresh public Peer
 	// rather than keeping the caller's stale handle bound to a new session.
 	if event.Peer != nil && (event.Type == core.EventDisconnect || event.Type == core.EventDisconnectTimeout) {
+		if wrapped != nil {
+			wrapped.raw = nil
+			wrapped.state = PeerStateDisconnected
+		}
 		delete(h.peers, event.Peer)
 	}
 	return out

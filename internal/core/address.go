@@ -3,8 +3,8 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"net/netip"
+	"strconv"
 )
 
 var errAddressHasZone = errors.New("goenet: address must not include IPv6 zone")
@@ -47,7 +47,9 @@ func (a Address) String() string {
 	if a.scopeID == 0 {
 		return a.addrPort.String()
 	}
-	return fmt.Sprintf("%s%%%d", a.addrPort.String(), a.scopeID)
+
+	addr := a.addrPort.Addr().WithZone(strconv.FormatUint(uint64(a.scopeID), 10))
+	return netip.AddrPortFrom(addr, a.addrPort.Port()).String()
 }
 
 // IsValid reports whether the address has a usable underlying netip.AddrPort.
