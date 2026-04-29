@@ -247,7 +247,8 @@ func (h *Host) Flush(ctx context.Context) error {
 
 			h.commitPreparedDatagram(p, datagram)
 			if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
-				if err := h.Disconnect(p, h.runtime[p].eventData); err != nil {
+				// Same as the receive-path call: always hits the no-flush branch.
+				if err := h.Disconnect(ctx, p, h.runtime[p].eventData); err != nil {
 					return err
 				}
 			}

@@ -73,10 +73,8 @@ func zoneFromScopeID(scopeID uint32) string {
 		return ""
 	}
 
-	iface, err := net.InterfaceByIndex(int(scopeID))
-	if err == nil && iface.Name != "" {
-		return iface.Name
-	}
-
+	// Go's resolver accepts numeric IPv6 zones directly, so we can skip the
+	// per-call net.InterfaceByIndex syscall that would otherwise fire on every
+	// outbound write to a scoped peer.
 	return strconv.FormatUint(uint64(scopeID), 10)
 }

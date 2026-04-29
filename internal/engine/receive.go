@@ -152,6 +152,11 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	}
 	if currentPeer != nil {
 		currentPeer.IncomingDataTotal += checkedUint32FromInt(len(payload))
+		// Track liveness for any inbound traffic, not just ACKs (matches C
+		// enet_protocol_handle_incoming_commands setting peer->lastReceiveTime).
+		// Without this, idle-timeout / ping-keepalive logic misclassify an
+		// actively-sending peer whose ACKs were dropped as silent.
+		currentPeer.LastReceiveTime = maxUint32(h.serviceTime, 1)
 	}
 
 	workingPayload := payload
@@ -504,7 +509,11 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 		}
 		h.notifyConnect(p)
 	} else if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
-		if err := h.Disconnect(p, h.runtime[p].eventData); err != nil {
+		// In-receive Disconnect path always lands on the Connected/DisconnectLater
+		// branch which queues the bye-bye command without flushing, so it cannot
+		// recurse into the synchronous-flush path. Background ctx is therefore
+		// safe and never reaches the socket.
+		if err := h.Disconnect(context.Background(), p, h.runtime[p].eventData); err != nil {
 			return false
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,13 +22,22 @@ var ErrHostClosed = errors.New("goenet: host closed")
 var ErrNilPeer = errors.New("goenet: nil peer")
 
 // Host is the public root for ENet-compatible peer management.
+//
+// All public methods on Host (and methods on Peer that route through Host) are
+// safe for concurrent use from multiple goroutines. Mutual exclusion is provided
+// by an internal mutex held for the duration of each engine call. A goroutine
+// blocked in Service holds the lock; concurrent Send/Disconnect/Broadcast calls
+// will wait until that Service tick returns. Run Service in one goroutine and
+// other operations in others if you want them to interleave.
 type Host struct {
+	mu        sync.Mutex
 	config    Config
 	localAddr net.Addr
 	socket    isocket.DatagramSocket
 	engine    *engine.Host
 	peers     map[*peer.Peer]*Peer
 	closed    atomic.Bool
+	startTime time.Time
 }
 
 // Listen creates a public host bound to addr.
@@ -112,6 +122,10 @@ func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, err
 		return nil, err
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.engine.SetServiceTime(h.nowMs())
+
 	raw, err := h.engine.Connect(address, channelCount, data)
 	if err != nil {
 		return nil, err
@@ -137,6 +151,10 @@ func (h *Host) Service(ctx context.Context, timeout time.Duration) (Event, error
 		defer cancel()
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.engine.SetServiceTime(h.nowMs())
+
 	event, err := h.engine.Service(tickCtx, durationMillis(timeout))
 	if err != nil {
 		// A tick-scoped deadline simply marks the end of this Service call.
@@ -155,6 +173,10 @@ func (h *Host) Flush(ctx context.Context) error {
 		return ErrHostClosed
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.engine.SetServiceTime(h.nowMs())
+
 	return h.engine.Flush(ctx)
 }
 
@@ -167,6 +189,11 @@ func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
 	}
 
 	corePacket := toCorePacket(packet)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.engine.SetServiceTime(h.nowMs())
+
 	var errs []error
 	for _, wrapped := range h.orderedPeers() {
 		if wrapped.raw.State != core.PeerStateConnected {
@@ -187,6 +214,8 @@ func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) error
 	if h.closed.Load() {
 		return ErrHostClosed
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.engine.BandwidthLimit(incomingBandwidth, outgoingBandwidth)
 	return nil
 }
@@ -217,11 +246,20 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 	normalized.Intercept = cfg.Intercept
 
 	return &Host{
-		config: normalized,
-		socket: sock,
-		engine: engine.NewHost(coreCfg, sock, 0),
-		peers:  make(map[*peer.Peer]*Peer),
+		config:    normalized,
+		socket:    sock,
+		engine:    engine.NewHost(coreCfg, sock, 0),
+		peers:     make(map[*peer.Peer]*Peer),
+		startTime: time.Now(),
 	}
+}
+
+// nowMs returns wall-clock milliseconds elapsed since host construction, narrowed
+// to uint32. ENet's protocol fields, RTT math, and timeout windows all use uint32
+// ms with overflow-safe comparisons; anchoring on startTime keeps the value small
+// for the lifetime of the host while still tracking real elapsed time.
+func (h *Host) nowMs() uint32 {
+	return uint32(time.Since(h.startTime) / time.Millisecond)
 }
 
 func cloneNetAddr(addr net.Addr) net.Addr {

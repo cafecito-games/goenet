@@ -100,6 +100,19 @@ func (h *Host) Peers() []*peer.Peer {
 	return h.peers
 }
 
+// SetServiceTime overrides the engine's millisecond clock to t. The public host
+// calls this at the start of every Service/Flush from a wall clock so RTT,
+// retransmit, and throttle math observe real elapsed time. Tests use it to drive
+// a virtual clock deterministically.
+func (h *Host) SetServiceTime(t uint32) {
+	h.serviceTime = t
+}
+
+// ServiceTime returns the engine's current millisecond clock (primarily for tests).
+func (h *Host) ServiceTime() uint32 {
+	return h.serviceTime
+}
+
 // AddPeer reserves or extends a peer slot with the provided address and state.
 //
 // AddPeer is exposed only as a test-construction helper so harnesses can bypass
@@ -141,7 +154,8 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 }
 
 // Disconnect follows ENet's graceful or handshake-state disconnect path for p.
-func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
+// ctx scopes any synchronous flush triggered by an unsequenced disconnect.
+func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -167,7 +181,7 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 	if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
 		return err
 	}
-	if err := h.Flush(context.Background()); err != nil {
+	if err := h.Flush(ctx); err != nil {
 		return err
 	}
 	h.resetPeer(p)
@@ -175,7 +189,8 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 }
 
 // DisconnectNow force-flushes an unsequenced disconnect and resets the peer locally.
-func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
+// ctx scopes the synchronous flush of the disconnect command.
+func (h *Host) DisconnectNow(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -187,7 +202,7 @@ func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
 		if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
 			return err
 		}
-		if err := h.Flush(context.Background()); err != nil {
+		if err := h.Flush(ctx); err != nil {
 			return err
 		}
 	}
@@ -229,7 +244,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 }
 
 // DisconnectLater defers disconnect until the peer's outbound reliable work drains.
-func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
+func (h *Host) DisconnectLater(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -240,7 +255,7 @@ func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
 		return nil
 	}
 
-	return h.Disconnect(p, data)
+	return h.Disconnect(ctx, p, data)
 }
 
 // Reset immediately drops all local state for p without a wire notification.
