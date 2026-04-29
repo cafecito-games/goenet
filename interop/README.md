@@ -2,39 +2,51 @@
 
 This directory contains the cross-language interoperability coverage for `goenet`.
 
-## Source Of Truth
+## Setup
 
-The harness builds against the vendored ENet source in `interop/vendor` by default. Override that path with `ENET_SOURCE_DIR` when needed.
+The harness builds against the vendored ENet source in `interop/vendor` by default.
+If you want to override that, create the local env file first:
 
-The current fork layout expected by this repo is:
+```sh
+cp interop/.env.example interop/.env
+```
+
+Then set `ENET_SOURCE_DIR` in `interop/.env` to your preferred ENet source tree, or export it from your shell before running commands. If you need a different env file location, set `GOENET_INTEROP_ENVFILE`.
+
+The expected ENet layout is:
 
 - `include/enet.h`
 - single-header `ENET_IMPLEMENTATION` builds
 
-## Build
+## Run The Harness
+
+Use the task entrypoint for the normal operator workflow:
 
 ```sh
-./interop/build_c_harness.sh
+task interop:test
 ```
 
-To write the binary somewhere else:
+If you prefer to override the vendored source directly from your shell:
 
 ```sh
-ENET_SOURCE_DIR=/path/to/enet ./interop/build_c_harness.sh /tmp/enet-harness
+ENET_SOURCE_DIR=/absolute/path/to/enet task interop:test
 ```
 
-## Test Coverage
+The build step still runs on every invocation, but only rebuilds scenarios whose inputs changed. Unchanged scenarios are evaluated and skipped, so repeated runs stay incremental without requiring a separate clean/build phase.
 
-`go test ./interop -count=1` currently verifies one honest end-to-end path:
+To build one scenario explicitly:
 
-- the Go internal engine acting as an ENet-compatible server over a real UDP socket
-- the C harness acting as an ENet client
-- one connect event
-- one reliable packet from C to Go
-- one reliable packet from Go back to C
+```sh
+ENET_SOURCE_DIR=/absolute/path/to/enet ./interop/scripts/build_harness.sh go_server_reliable_exchange
+```
 
-## Current Limitation
+## Scenario Layout
 
-The public `goenet` package does not expose host construction, listen/connect, or service-loop APIs yet. Because of that, the interop test drives `internal/engine` directly instead of pretending the public API already exists.
+The harness is scenario-based:
 
-The current engine also does not expose a public or exported helper for initiating an outbound Go-side connect handshake, so this task covers the Go-server/C-client path only.
+- `interop/cases/` contains one scenario entrypoint per `.c` file.
+- `interop/lib/harness.c` and `interop/include/harness.h` contain the shared C harness helpers used by each scenario.
+- `interop/bin/` contains the compiled scenario executables.
+- `interop/scripts/build_harness.sh` evaluates the scenario set and rebuilds only what changed.
+
+The Go tests in this directory launch those compiled scenario binaries and exercise the corresponding Go host/client behavior end to end.
