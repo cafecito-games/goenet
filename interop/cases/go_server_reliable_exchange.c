@@ -4,6 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
+static void log_receive(const ENetPacket *packet) {
+    char payload[packet->dataLength + 1];
+    memcpy(payload, packet->data, packet->dataLength);
+    payload[packet->dataLength] = '\0';
+    harness_log("RECEIVE", payload);
+}
+
 static int run_client(const harness_config *cfg) {
     ENetHost *client = enet_host_create(NULL, 1, 1, 0, 0);
     if (client == NULL) {
@@ -44,8 +51,7 @@ static int run_client(const harness_config *cfg) {
                     harness_log("CONNECT", NULL);
                     break;
                 case ENET_EVENT_TYPE_RECEIVE:
-                    printf("RECEIVE %.*s\n", (int)event.packet->dataLength, event.packet->data);
-                    fflush(stdout);
+                    log_receive(event.packet);
                     if (harness_payload_matches(event.packet, cfg->expect_payload)) {
                         payload_received = true;
                         result = 0;
