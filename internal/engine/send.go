@@ -237,7 +237,7 @@ func (h *Host) Flush(ctx context.Context) error {
 				break
 			}
 
-				n, err := h.socket.WritePacket(ctx, p.Address, datagram.payload)
+			n, err := h.socket.WritePacket(ctx, p.Address, datagram.payload)
 			if err != nil {
 				return err
 			}

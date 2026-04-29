@@ -109,7 +109,7 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 
 func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	if h.config.Intercept != nil {
-			decision, err := h.config.Intercept.Intercept(addr.AddrPort(), payload)
+		decision, err := h.config.Intercept.Intercept(addr.AddrPort(), payload)
 		if err != nil {
 			return err
 		}

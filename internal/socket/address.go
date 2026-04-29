@@ -58,7 +58,14 @@ func scopeIDFromZone(zone string) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("socket: resolve interface zone %q: %w", zone, err)
 	}
-	return uint32(iface.Index), nil
+	if iface.Index < 0 {
+		return 0, fmt.Errorf("socket: interface %q has negative index %d", zone, iface.Index)
+	}
+	id, err := strconv.ParseUint(strconv.Itoa(iface.Index), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("socket: parse interface %q index %d: %w", zone, iface.Index, err)
+	}
+	return uint32(id), nil
 }
 
 func zoneFromScopeID(scopeID uint32) string {

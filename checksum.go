@@ -33,16 +33,3 @@ func fromCoreBuffers(buffers []core.Buffer) []Buffer {
 
 	return publicBuffers
 }
-
-func toCoreBuffers(buffers []Buffer) []core.Buffer {
-	if len(buffers) == 0 {
-		return nil
-	}
-
-	coreBuffers := make([]core.Buffer, len(buffers))
-	for i, buffer := range buffers {
-		coreBuffers[i] = core.Buffer{Data: buffer.Data}
-	}
-
-	return coreBuffers
-}
