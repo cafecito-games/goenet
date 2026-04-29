@@ -56,10 +56,16 @@ type Peer struct {
 	OutgoingCommands               outgoingQueue
 	OutgoingSendReliableCommands   outgoingQueue
 	SentReliableCommands           outgoingQueue
+	sentReliableIndex              map[sentReliableKey]*ListElement[*OutgoingCommand]
 	DispatchedCommands             incomingQueue
 	IncomingUnsequencedGroup       uint16
 	UnsequencedWindow              [32]uint32
 	TotalWaitingData               uint32
+}
+
+type sentReliableKey struct {
+	reliableSequenceNumber uint16
+	channelID              uint8
 }
 
 // QueueDispatchedCommand appends a receive command to the peer dispatch queue.
@@ -75,6 +81,43 @@ func (p *Peer) PopDispatchedCommand() *IncomingCommand {
 	}
 
 	return p.DispatchedCommands.Remove(front)
+}
+
+// IndexSentReliableCommand records the list element for O(1) ACK removal lookups.
+func (p *Peer) IndexSentReliableCommand(elem *ListElement[*OutgoingCommand]) {
+	if elem == nil {
+		return
+	}
+	if p.sentReliableIndex == nil {
+		p.sentReliableIndex = make(map[sentReliableKey]*ListElement[*OutgoingCommand])
+	}
+	cmd := elem.Value()
+	p.sentReliableIndex[sentReliableKey{
+		reliableSequenceNumber: cmd.ReliableSequenceNumber,
+		channelID:              cmd.Command.Header.ChannelID,
+	}] = elem
+}
+
+// RemoveIndexedSentReliableCommand removes and returns an indexed in-flight reliable command entry.
+func (p *Peer) RemoveIndexedSentReliableCommand(reliableSequenceNumber uint16, channelID uint8) *ListElement[*OutgoingCommand] {
+	if p.sentReliableIndex == nil {
+		return nil
+	}
+	key := sentReliableKey{reliableSequenceNumber: reliableSequenceNumber, channelID: channelID}
+	elem := p.sentReliableIndex[key]
+	delete(p.sentReliableIndex, key)
+	return elem
+}
+
+// UnindexSentReliableCommand removes the index entry for cmd when it leaves the in-flight queue.
+func (p *Peer) UnindexSentReliableCommand(cmd *OutgoingCommand) {
+	if p.sentReliableIndex == nil || cmd == nil {
+		return
+	}
+	delete(p.sentReliableIndex, sentReliableKey{
+		reliableSequenceNumber: cmd.ReliableSequenceNumber,
+		channelID:              cmd.Command.Header.ChannelID,
+	})
 }
 
 // CanQueueWaitingData reports whether another packet fits under the configured waiting-data cap.

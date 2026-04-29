@@ -19,17 +19,23 @@ func (h Header) MarshalBinary(dst []byte) []byte {
 	flagsAndPeerID |= uint16(h.Flags & HeaderFlagMask)
 	flagsAndPeerID |= (uint16(h.SessionID) << HeaderSessionShift) & HeaderSessionMask
 
-	start := len(dst)
-	dst = append(dst, make([]byte, headerMinimalSize)...)
+	dst, start := appendLen(dst, h.WireSize())
 	binary.BigEndian.PutUint16(dst[start:start+headerMinimalSize], flagsAndPeerID)
 
 	if h.Flags&HeaderFlagSentTime == 0 {
 		return dst
 	}
 
-	dst = append(dst, make([]byte, 2)...)
 	binary.BigEndian.PutUint16(dst[start+headerMinimalSize:start+headerSize], h.SentTime)
 	return dst
+}
+
+// WireSize reports the encoded size of the packet header.
+func (h Header) WireSize() int {
+	if h.Flags&HeaderFlagSentTime != 0 {
+		return headerSize
+	}
+	return headerMinimalSize
 }
 
 // ParseHeader decodes one ENet packet header from src.

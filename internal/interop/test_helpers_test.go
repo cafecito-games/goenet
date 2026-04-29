@@ -452,9 +452,15 @@ func waitForPublicPayload(t *testing.T, host *goenet.Host, want string) goenet.E
 func mustSendPublicReliablePacket(t *testing.T, host *goenet.Host, remotePeer *goenet.Peer, payload string) {
 	t.Helper()
 
+	mustSendPublicPacketWithFlags(t, host, remotePeer, payload, goenet.PacketFlagReliable)
+}
+
+func mustSendPublicPacketWithFlags(t *testing.T, host *goenet.Host, remotePeer *goenet.Peer, payload string, flags goenet.PacketFlag) {
+	t.Helper()
+
 	if err := remotePeer.Send(0, &goenet.Packet{
 		Data:  []byte(payload),
-		Flags: goenet.PacketFlagReliable,
+		Flags: flags,
 	}); err != nil {
 		t.Fatal(err)
 	}

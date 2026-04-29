@@ -32,6 +32,7 @@ Host construction:
 - `NewHost(cfg Config) (*Host, error)`
 - `(*Host).Config() Config`
 - `(*Host).LocalAddr() net.Addr`
+- `(*Peer).RemoteAddr() net.Addr`
 - `(*Host).Close() error`
 
 Host operations:
@@ -162,7 +163,6 @@ The executable examples in [`examples/`](./examples) use the exported `goenet` p
 
 ## Current Limitations
 
-- The public API exposes the host's local bound address, but it does not yet expose remote peer address accessors.
 - Connected-flow disconnects are usable, but handshake-state disconnect behavior is not yet a byte-for-byte match for ENet's special unsequenced fast path.
 
 ## Development

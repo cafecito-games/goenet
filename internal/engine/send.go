@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -18,6 +19,7 @@ const (
 	sendUnreliableCommandSize         = 8
 	sendUnsequencedCommandSize        = 8
 	sendFragmentCommandSize           = 24
+	maximumDatagramsPerPeerFlush      = int(protocol.MaximumPacketCommands)
 )
 
 type outgoingSelection struct {
@@ -37,6 +39,10 @@ type outgoingPayloadSequencer interface {
 	setOutgoingSequenceNumbers(reliable, unreliable uint16)
 }
 
+type wireSizer interface {
+	WireSize() int
+}
+
 type sendReliablePayload struct {
 	channelID              uint8
 	reliableSequenceNumber uint16
@@ -49,14 +55,18 @@ func (p *sendReliablePayload) setOutgoingSequenceNumbers(reliable, _ uint16) {
 
 // MarshalBinary appends the reliable payload wire encoding to dst.
 func (p *sendReliablePayload) MarshalBinary(dst []byte) []byte {
-	start := len(dst)
-	dst = append(dst, make([]byte, 6+len(p.data))...)
+	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendReliable | protocol.Command(protocol.CommandFlagAcknowledge))
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+6:], p.data)
 	return dst
+}
+
+// WireSize reports the encoded size of the reliable payload command.
+func (p *sendReliablePayload) WireSize() int {
+	return sendReliableCommandSize + len(p.data)
 }
 
 type sendUnreliablePayload struct {
@@ -73,8 +83,7 @@ func (p *sendUnreliablePayload) setOutgoingSequenceNumbers(reliable, unreliable 
 
 // MarshalBinary appends the unreliable payload wire encoding to dst.
 func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
-	start := len(dst)
-	dst = append(dst, make([]byte, 8+len(p.data))...)
+	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendUnreliable)
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
@@ -82,6 +91,11 @@ func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+8:], p.data)
 	return dst
+}
+
+// WireSize reports the encoded size of the unreliable payload command.
+func (p *sendUnreliablePayload) WireSize() int {
+	return sendUnreliableCommandSize + len(p.data)
 }
 
 type sendUnsequencedPayload struct {
@@ -97,8 +111,7 @@ func (p *sendUnsequencedPayload) setOutgoingSequenceNumbers(reliable, _ uint16) 
 
 // MarshalBinary appends the unsequenced payload wire encoding to dst.
 func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
-	start := len(dst)
-	dst = append(dst, make([]byte, 8+len(p.data))...)
+	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendUnsequenced | protocol.Command(protocol.CommandFlagUnsequenced))
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
@@ -106,6 +119,11 @@ func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+8:], p.data)
 	return dst
+}
+
+// WireSize reports the encoded size of the unsequenced payload command.
+func (p *sendUnsequencedPayload) WireSize() int {
+	return sendUnsequencedCommandSize + len(p.data)
 }
 
 func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.Packet) error {
@@ -219,6 +237,11 @@ func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) e
 
 // Flush serializes and writes all currently queued outbound peer traffic.
 func (h *Host) Flush(ctx context.Context) error {
+	writeBudget := maximumDatagramsPerPeerFlush
+	if len(h.peers) > 1 {
+		writeBudget *= len(h.peers)
+	}
+
 	for _, p := range h.peers {
 		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
 			return fmt.Errorf(
@@ -229,6 +252,9 @@ func (h *Host) Flush(ctx context.Context) error {
 		}
 
 		for {
+			if writeBudget == 0 {
+				return nil
+			}
 			datagram, wroteAny, err := h.preparePeerDatagram(p)
 			if err != nil {
 				return err
@@ -246,6 +272,7 @@ func (h *Host) Flush(ctx context.Context) error {
 			}
 
 			h.commitPreparedDatagram(p, datagram)
+			writeBudget--
 			if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
 				// Same as the receive-path call: always hits the no-flush branch.
 				if err := h.Disconnect(ctx, p, h.runtime[p].eventData); err != nil {
@@ -364,7 +391,7 @@ func (h *Host) commitPreparedDatagram(p *peer.Peer, datagram preparedDatagram) {
 		if wasEmpty {
 			p.NextTimeout = h.serviceTime + cmd.RoundTripTimeout
 		}
-		p.SentReliableCommands.PushBack(cmd)
+		p.IndexSentReliableCommand(p.SentReliableCommands.PushBack(cmd))
 	}
 }
 
@@ -455,7 +482,7 @@ func buildSelection(cmd *peer.OutgoingCommand, fromReliableQueue bool) outgoingS
 func buildAckSelection(ack *peer.Acknowledgement) outgoingSelection {
 	return outgoingSelection{
 		ack:      ack,
-		wireSize: len(marshalAcknowledgement(ack).MarshalBinary(nil)),
+		wireSize: marshalAcknowledgement(ack).WireSize(),
 	}
 }
 
@@ -474,6 +501,9 @@ func commandRequiresAck(cmd *peer.OutgoingCommand) bool {
 }
 
 func commandWireSize(cmd *peer.OutgoingCommand) int {
+	if sized, ok := cmd.Command.Payload.(wireSizer); ok {
+		return sized.WireSize()
+	}
 	return len(cmd.Command.Payload.MarshalBinary(nil))
 }
 
@@ -653,6 +683,13 @@ func checksumSize(checksummer core.Checksummer) int {
 	}
 
 	return 4
+}
+
+func appendLen(dst []byte, n int) (buf []byte, start int) {
+	start = len(dst)
+	dst = slices.Grow(dst, n)
+	dst = dst[:start+n]
+	return dst, start
 }
 
 func outgoingChecksumSeed(p *peer.Peer) uint32 {
