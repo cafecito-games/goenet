@@ -2,6 +2,7 @@ package interop_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,12 +10,16 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -201,6 +206,166 @@ func mustSendReliableEnginePacket(t *testing.T, host *engine.Host, peer *peer.Pe
 	if err := host.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type scenarioReadyBuffer struct {
+	mu     sync.Mutex
+	output bytes.Buffer
+}
+
+func (b *scenarioReadyBuffer) Write(src []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.output.Write(src)
+}
+
+func (b *scenarioReadyBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.output.String()
+}
+
+func startReadyScenarioOnEphemeralPort(t *testing.T, name string, args ...string) (*scenarioProcess, int) {
+	t.Helper()
+
+	args = append([]string{"--port", "0"}, args...)
+	cmd := exec.Command(harnessBinaryPath(name), args...)
+	var proc scenarioProcess
+	var ready scenarioReadyBuffer
+	writer := io.MultiWriter(&proc.output, &ready)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	proc.cmd = cmd
+
+	deadline := time.Now().Add(scenarioTimeout)
+	for time.Now().Before(deadline) {
+		if port, ok := readyScenarioPort(ready.String()); ok {
+			return &proc, port
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_ = proc.cmd.Process.Kill()
+	t.Fatalf("timed out waiting for scenario READY port\n%s", ready.String())
+	return nil, 0
+}
+
+func readyScenarioPort(output string) (int, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "READY ") {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "READY ")))
+		if err != nil || port <= 0 {
+			return 0, false
+		}
+		return port, true
+	}
+
+	return 0, false
+}
+
+func mustNewPublicHost(t *testing.T) *goenet.Host {
+	t.Helper()
+
+	host, err := goenet.Listen("127.0.0.1:0", goenet.Config{
+		PeerCount:    8,
+		ChannelLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = host.Close()
+	})
+
+	return host
+}
+
+func mustConnectPublicHost(t *testing.T, host *goenet.Host, port int) *goenet.Peer {
+	t.Helper()
+
+	peer, err := host.Connect(fmt.Sprintf("127.0.0.1:%d", port), 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	return peer
+}
+
+func waitForPublicEventType(t *testing.T, host *goenet.Host, want goenet.EventType) goenet.Event {
+	t.Helper()
+
+	deadline := time.Now().Add(scenarioTimeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		event, err := host.Service(ctx, 10*time.Millisecond)
+		cancel()
+		if err != nil {
+			if isTimeoutError(err) {
+				continue
+			}
+			t.Fatal(err)
+		}
+		if event.Type == want {
+			return event
+		}
+	}
+
+	t.Fatalf("timed out waiting for event type %v", want)
+	return goenet.Event{}
+}
+
+func waitForPublicPayload(t *testing.T, host *goenet.Host, want string) goenet.Event {
+	t.Helper()
+
+	deadline := time.Now().Add(scenarioTimeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		event, err := host.Service(ctx, 10*time.Millisecond)
+		cancel()
+		if err != nil {
+			if isTimeoutError(err) {
+				continue
+			}
+			t.Fatal(err)
+		}
+		if event.Type != goenet.EventReceive || event.Packet == nil {
+			continue
+		}
+		if got := string(event.Packet.Data); got == want {
+			return event
+		}
+	}
+
+	t.Fatalf("timed out waiting for payload %q", want)
+	return goenet.Event{}
+}
+
+func mustSendPublicReliablePacket(t *testing.T, host *goenet.Host, peer *goenet.Peer, payload string) {
+	t.Helper()
+
+	if err := peer.Send(0, &goenet.Packet{
+		Data:  []byte(payload),
+		Flags: goenet.PacketFlagReliable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
 type udpSocket struct {

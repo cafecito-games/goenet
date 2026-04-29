@@ -28,7 +28,7 @@ bool harness_parse_args(int argc, char **argv, harness_config *cfg) {
         }
         if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             long value = strtol(argv[++i], NULL, 10);
-            if (value <= 0 || value > 65535) {
+            if (value < 0 || value > 65535) {
                 fprintf(stderr, "invalid port: %ld\n", value);
                 return false;
             }
