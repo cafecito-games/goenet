@@ -32,15 +32,6 @@ func (a Address) ScopeID() uint32 {
 	return a.scopeID
 }
 
-func toCoreAddress(address Address) core.Address {
-	coreAddress, err := core.NewAddress(address.addrPort, address.scopeID)
-	if err != nil {
-		panic(err)
-	}
-
-	return coreAddress
-}
-
 func fromCoreAddress(address core.Address) Address {
 	return Address{
 		addrPort: address.AddrPort(),

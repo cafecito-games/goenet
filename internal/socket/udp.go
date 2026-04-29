@@ -1,3 +1,4 @@
+// Package socket provides datagram socket adapters for the ENet runtime.
 package socket
 
 import (

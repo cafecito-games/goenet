@@ -6,10 +6,15 @@ import "github.com/cafecito-games/goenet/internal/core"
 type EventType uint8
 
 const (
+	// EventNone reports that no event was produced during a service step.
 	EventNone EventType = iota
+	// EventConnect reports that a peer completed the ENet connection handshake.
 	EventConnect
+	// EventDisconnect reports that a peer disconnected cleanly.
 	EventDisconnect
+	// EventReceive reports that a packet payload arrived for a peer channel.
 	EventReceive
+	// EventDisconnectTimeout reports that a peer timed out locally.
 	EventDisconnectTimeout
 )
 
@@ -32,18 +37,5 @@ func toCoreEvent(event *Event) *core.Event {
 		ChannelID: event.ChannelID,
 		Data:      event.Data,
 		Packet:    toCorePacket(event.Packet),
-	}
-}
-
-func fromCoreEvent(event *core.Event) *Event {
-	if event == nil {
-		return nil
-	}
-
-	return &Event{
-		Type:      EventType(event.Type),
-		ChannelID: event.ChannelID,
-		Data:      event.Data,
-		Packet:    fromCorePacket(event.Packet),
 	}
 }

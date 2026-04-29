@@ -1,5 +1,7 @@
+// Package timeutil mirrors ENet's overflow-safe millisecond time helpers.
 package timeutil
 
+// TimeOverflow is ENet's wraparound threshold for millisecond arithmetic.
 const TimeOverflow uint32 = 86400000
 
 // Difference matches ENet's overflow-safe millisecond arithmetic.

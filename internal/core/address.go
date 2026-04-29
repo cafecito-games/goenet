@@ -1,3 +1,4 @@
+// Package core holds shared internal transport-facing value types.
 package core
 
 import (

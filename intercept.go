@@ -10,7 +10,9 @@ import (
 type InterceptResult uint8
 
 const (
+	// InterceptResultContinue lets the packet continue through normal protocol handling.
 	InterceptResultContinue InterceptResult = iota
+	// InterceptResultConsume stops normal protocol handling for the packet.
 	InterceptResultConsume
 )
 
@@ -29,6 +31,7 @@ type interceptorAdapter struct {
 	inner Interceptor
 }
 
+// Intercept adapts the public interceptor interface to the internal core form.
 func (a interceptorAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
 	decision, err := a.inner.Intercept(addr, payload)
 	if err != nil {

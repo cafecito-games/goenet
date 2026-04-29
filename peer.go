@@ -11,15 +11,25 @@ import (
 type PeerState uint8
 
 const (
+	// PeerStateDisconnected reports that no live session exists for the peer.
 	PeerStateDisconnected PeerState = iota
+	// PeerStateConnecting reports that an outbound connect command was queued.
 	PeerStateConnecting
+	// PeerStateAcknowledgingConnect reports that the peer is acknowledging an inbound connect.
 	PeerStateAcknowledgingConnect
+	// PeerStateConnectionPending reports that the peer is waiting for verify-connect.
 	PeerStateConnectionPending
+	// PeerStateConnectionSucceeded reports that the connect handshake has succeeded locally.
 	PeerStateConnectionSucceeded
+	// PeerStateConnected reports that the peer is fully connected.
 	PeerStateConnected
+	// PeerStateDisconnectLater reports that disconnect is deferred until reliable queues drain.
 	PeerStateDisconnectLater
+	// PeerStateDisconnecting reports that a graceful disconnect is in progress.
 	PeerStateDisconnecting
+	// PeerStateAcknowledgingDisconnect reports that disconnect acknowledgment is pending.
 	PeerStateAcknowledgingDisconnect
+	// PeerStateZombie reports that the peer is awaiting local cleanup after disconnect.
 	PeerStateZombie
 )
 
@@ -107,10 +117,6 @@ func (p *Peer) Reset() {
 
 	p.host.engine.Reset(p.raw)
 	p.state = fromCorePeerState(p.raw.State)
-}
-
-func toCorePeerState(state PeerState) core.PeerState {
-	return core.PeerState(state)
 }
 
 func fromCorePeerState(state core.PeerState) PeerState {

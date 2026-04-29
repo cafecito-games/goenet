@@ -13,6 +13,7 @@ type Header struct {
 	Flags     HeaderFlag
 }
 
+// MarshalBinary appends the ENet wire encoding of the header to dst.
 func (h Header) MarshalBinary(dst []byte) []byte {
 	flagsAndPeerID := h.PeerID & MaximumPeerID
 	flagsAndPeerID |= uint16(h.Flags & HeaderFlagMask)
@@ -31,6 +32,7 @@ func (h Header) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// ParseHeader decodes one ENet packet header from src.
 func ParseHeader(src []byte) (Header, error) {
 	if len(src) < headerMinimalSize {
 		return Header{}, fmt.Errorf("protocol header too short: got %d bytes", len(src))

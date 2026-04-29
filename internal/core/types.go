@@ -1,3 +1,4 @@
+// Package core holds shared internal transport-facing value types.
 package core
 
 import "net/netip"
@@ -17,7 +18,9 @@ type Buffer struct {
 type PacketFlag uint32
 
 const (
-	PacketFlagReliable    PacketFlag = 1 << 0
+	// PacketFlagReliable requests reliable delivery semantics.
+	PacketFlagReliable PacketFlag = 1 << 0
+	// PacketFlagUnsequenced requests ENet's unsequenced delivery mode.
 	PacketFlagUnsequenced PacketFlag = 1 << 1
 )
 
@@ -31,10 +34,15 @@ type Packet struct {
 type EventType uint8
 
 const (
+	// EventNone reports that no event was produced during a service step.
 	EventNone EventType = iota
+	// EventConnect reports that a peer completed the ENet connection handshake.
 	EventConnect
+	// EventDisconnect reports that a peer disconnected cleanly.
 	EventDisconnect
+	// EventReceive reports that a packet payload arrived for a peer channel.
 	EventReceive
+	// EventDisconnectTimeout reports that a peer timed out locally.
 	EventDisconnectTimeout
 )
 
@@ -42,15 +50,25 @@ const (
 type PeerState uint8
 
 const (
+	// PeerStateDisconnected reports that no live session exists for the peer.
 	PeerStateDisconnected PeerState = iota
+	// PeerStateConnecting reports that an outbound connect command was queued.
 	PeerStateConnecting
+	// PeerStateAcknowledgingConnect reports that the peer is acknowledging an inbound connect.
 	PeerStateAcknowledgingConnect
+	// PeerStateConnectionPending reports that the peer is waiting for verify-connect.
 	PeerStateConnectionPending
+	// PeerStateConnectionSucceeded reports that the connect handshake has succeeded locally.
 	PeerStateConnectionSucceeded
+	// PeerStateConnected reports that the peer is fully connected.
 	PeerStateConnected
+	// PeerStateDisconnectLater reports that disconnect is deferred until reliable queues drain.
 	PeerStateDisconnectLater
+	// PeerStateDisconnecting reports that a graceful disconnect is in progress.
 	PeerStateDisconnecting
+	// PeerStateAcknowledgingDisconnect reports that disconnect acknowledgment is pending.
 	PeerStateAcknowledgingDisconnect
+	// PeerStateZombie reports that the peer is awaiting local cleanup after disconnect.
 	PeerStateZombie
 )
 
@@ -69,7 +87,9 @@ type Compressor interface {
 type InterceptResult uint8
 
 const (
+	// InterceptResultContinue lets the packet continue through normal protocol handling.
 	InterceptResultContinue InterceptResult = iota
+	// InterceptResultConsume stops normal protocol handling for the packet.
 	InterceptResultConsume
 )
 

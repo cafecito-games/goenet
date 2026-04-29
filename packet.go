@@ -6,7 +6,9 @@ import "github.com/cafecito-games/goenet/internal/core"
 type PacketFlag uint32
 
 const (
-	PacketFlagReliable    PacketFlag = 1 << 0
+	// PacketFlagReliable requests reliable delivery semantics.
+	PacketFlagReliable PacketFlag = 1 << 0
+	// PacketFlagUnsequenced requests ENet's unsequenced delivery mode.
 	PacketFlagUnsequenced PacketFlag = 1 << 1
 )
 

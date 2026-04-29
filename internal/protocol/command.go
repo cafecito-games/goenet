@@ -1,8 +1,10 @@
+// Package protocol implements ENet packet headers and command wire formats.
 package protocol
 
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 // PacketCommand is an ENet protocol command payload.
@@ -117,6 +119,7 @@ type ThrottleConfigure struct {
 	PacketThrottleDeceleration uint32
 }
 
+// MarshalBinary appends the ENet wire encoding of the command header to dst.
 func (h CommandHeader) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, commandHeaderSize)...)
@@ -126,6 +129,7 @@ func (h CommandHeader) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// ParseCommandHeader decodes one ENet command header from src.
 func ParseCommandHeader(src []byte) (CommandHeader, error) {
 	if len(src) < commandHeaderSize {
 		return CommandHeader{}, fmt.Errorf("protocol command too short: got %d bytes", len(src))
@@ -139,6 +143,7 @@ func ParseCommandHeader(src []byte) (CommandHeader, error) {
 	}, nil
 }
 
+// MarshalBinary appends the ENet wire encoding of the acknowledge command to dst.
 func (a Acknowledge) MarshalBinary(dst []byte) []byte {
 	header := a.Header
 	header.Command = CommandAcknowledge
@@ -151,6 +156,7 @@ func (a Acknowledge) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the connect command to dst.
 func (c Connect) MarshalBinary(dst []byte) []byte {
 	header := c.Header
 	header.Command = CommandConnect
@@ -176,6 +182,7 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the verify-connect command to dst.
 func (c VerifyConnect) MarshalBinary(dst []byte) []byte {
 	header := c.Header
 	header.Command = CommandVerifyConnect
@@ -199,6 +206,7 @@ func (c VerifyConnect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the disconnect command to dst.
 func (d Disconnect) MarshalBinary(dst []byte) []byte {
 	header := d.Header
 	header.Command = CommandDisconnect
@@ -210,6 +218,7 @@ func (d Disconnect) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the ping command to dst.
 func (p Ping) MarshalBinary(dst []byte) []byte {
 	header := p.Header
 	header.Command = CommandPing
@@ -217,6 +226,7 @@ func (p Ping) MarshalBinary(dst []byte) []byte {
 	return header.MarshalBinary(dst)
 }
 
+// MarshalBinary appends the ENet wire encoding of the reliable payload command to dst.
 func (s SendReliable) MarshalBinary(dst []byte) []byte {
 	header := s.Header
 	header.Command = CommandSendReliable
@@ -225,11 +235,12 @@ func (s SendReliable) MarshalBinary(dst []byte) []byte {
 	start := len(dst)
 	dst = header.MarshalBinary(dst)
 	dst = append(dst, make([]byte, sendReliableCommandSize-commandHeaderSize)...)
-	binary.BigEndian.PutUint16(dst[start+4:start+6], uint16(len(s.Data)))
+	binary.BigEndian.PutUint16(dst[start+4:start+6], payloadSize16(len(s.Data)))
 	dst = append(dst, s.Data...)
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the unreliable payload command to dst.
 func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
 	header := s.Header
 	header.Command = CommandSendUnreliable
@@ -238,11 +249,12 @@ func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
 	dst = header.MarshalBinary(dst)
 	dst = append(dst, make([]byte, sendUnreliableCommandSize-commandHeaderSize)...)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], s.UnreliableSequenceNumber)
-	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	binary.BigEndian.PutUint16(dst[start+6:start+8], payloadSize16(len(s.Data)))
 	dst = append(dst, s.Data...)
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the unsequenced payload command to dst.
 func (s SendUnsequenced) MarshalBinary(dst []byte) []byte {
 	header := s.Header
 	header.Command = CommandSendUnsequenced
@@ -252,11 +264,12 @@ func (s SendUnsequenced) MarshalBinary(dst []byte) []byte {
 	dst = header.MarshalBinary(dst)
 	dst = append(dst, make([]byte, sendUnsequencedCommandSize-commandHeaderSize)...)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], s.UnsequencedGroup)
-	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	binary.BigEndian.PutUint16(dst[start+6:start+8], payloadSize16(len(s.Data)))
 	dst = append(dst, s.Data...)
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the fragment command to dst.
 func (s SendFragment) MarshalBinary(dst []byte) []byte {
 	header := s.Header
 	if header.Command == 0 {
@@ -270,7 +283,7 @@ func (s SendFragment) MarshalBinary(dst []byte) []byte {
 	dst = header.MarshalBinary(dst)
 	dst = append(dst, make([]byte, sendFragmentCommandSize-commandHeaderSize)...)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], s.StartSequenceNumber)
-	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(s.Data)))
+	binary.BigEndian.PutUint16(dst[start+6:start+8], payloadSize16(len(s.Data)))
 	binary.BigEndian.PutUint32(dst[start+8:start+12], s.FragmentCount)
 	binary.BigEndian.PutUint32(dst[start+12:start+16], s.FragmentNumber)
 	binary.BigEndian.PutUint32(dst[start+16:start+20], s.TotalLength)
@@ -279,6 +292,7 @@ func (s SendFragment) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the bandwidth-limit command to dst.
 func (b BandwidthLimit) MarshalBinary(dst []byte) []byte {
 	header := b.Header
 	header.Command = CommandBandwidthLimit
@@ -291,6 +305,7 @@ func (b BandwidthLimit) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// MarshalBinary appends the ENet wire encoding of the throttle-configure command to dst.
 func (t ThrottleConfigure) MarshalBinary(dst []byte) []byte {
 	header := t.Header
 	header.Command = CommandThrottleConfigure
@@ -304,6 +319,7 @@ func (t ThrottleConfigure) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+// ParseCommand decodes one ENet command from src and reports how many bytes it consumed.
 func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 	header, err := ParseCommandHeader(src)
 	if err != nil {
@@ -347,6 +363,14 @@ func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 	default:
 		return nil, 0, 0, fmt.Errorf("unsupported protocol command: 0x%02x", src[0])
 	}
+}
+
+func payloadSize16(n int) uint16 {
+	if n < 0 || n > math.MaxUint16 {
+		panic(fmt.Sprintf("protocol payload too large for 16-bit length: %d", n))
+	}
+
+	return uint16(n)
 }
 
 func parseAcknowledge(header CommandHeader, src []byte) (Acknowledge, int, error) {

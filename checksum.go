@@ -16,6 +16,7 @@ type checksummerAdapter struct {
 	inner Checksummer
 }
 
+// Checksum adapts the public checksum interface to the internal core form.
 func (a checksummerAdapter) Checksum(buffers []core.Buffer) uint32 {
 	return a.inner.Checksum(fromCoreBuffers(buffers))
 }
@@ -24,6 +25,7 @@ type coreChecksummerAdapter struct {
 	inner core.Checksummer
 }
 
+// Checksum adapts the internal core checksum interface to the public form.
 func (a coreChecksummerAdapter) Checksum(buffers []Buffer) uint32 {
 	return a.inner.Checksum(toCoreBuffers(buffers))
 }
