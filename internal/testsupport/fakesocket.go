@@ -4,19 +4,23 @@ package testsupport
 import (
 	"context"
 	"io"
-	"net/netip"
 	"testing"
+
+	"net/netip"
+
+	"github.com/cafecito-games/goenet/internal/core"
+	"github.com/cafecito-games/goenet/internal/socket"
 )
 
 // SocketWrite captures one outbound datagram.
 type SocketWrite struct {
-	Addr    netip.AddrPort
+	Addr    core.Address
 	Payload []byte
 }
 
 // SocketRead captures one scripted inbound datagram or read error.
 type SocketRead struct {
-	Addr    netip.AddrPort
+	Addr    core.Address
 	Payload []byte
 	Err     error
 }
@@ -34,21 +38,21 @@ func NewFakeSocket() *FakeSocket {
 }
 
 // ReadPacket returns the next scripted inbound datagram or error.
-func (s *FakeSocket) ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, error) {
+func (s *FakeSocket) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, error) {
 	select {
 	case <-ctx.Done():
-		return 0, netip.AddrPort{}, ctx.Err()
+		return 0, core.Address{}, ctx.Err()
 	default:
 	}
 
 	if len(s.reads) == 0 {
-		return 0, netip.AddrPort{}, io.EOF
+		return 0, core.Address{}, io.EOF
 	}
 
 	read := s.reads[0]
 	s.reads = s.reads[1:]
 	if read.Err != nil {
-		return 0, netip.AddrPort{}, read.Err
+		return 0, core.Address{}, read.Err
 	}
 
 	n := copy(buf, read.Payload)
@@ -60,7 +64,7 @@ func (s *FakeSocket) ReadPacket(ctx context.Context, buf []byte) (int, netip.Add
 }
 
 // WritePacket records one outbound datagram unless a scripted write error is set.
-func (s *FakeSocket) WritePacket(ctx context.Context, addr netip.AddrPort, payload []byte) (int, error) {
+func (s *FakeSocket) WritePacket(ctx context.Context, addr core.Address, payload []byte) (int, error) {
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
@@ -96,6 +100,15 @@ func (s *FakeSocket) SetWriteError(err error) {
 
 // QueueInbound appends one scripted inbound datagram.
 func (s *FakeSocket) QueueInbound(addr netip.AddrPort, payload []byte) {
+	coreAddr, err := socket.AddressFromAddrPort(addr)
+	if err != nil {
+		panic(err)
+	}
+	s.QueueInboundAddress(coreAddr, payload)
+}
+
+// QueueInboundAddress appends one scripted inbound datagram with explicit scope metadata.
+func (s *FakeSocket) QueueInboundAddress(addr core.Address, payload []byte) {
 	copyPayload := append([]byte(nil), payload...)
 	s.reads = append(s.reads, SocketRead{
 		Addr:    addr,

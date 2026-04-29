@@ -237,7 +237,7 @@ func TestConnectReturnsConnectingPeerAndFlushesConnectCommand(t *testing.T) {
 	}
 
 	write := sock.MustWrite(t, 0)
-	if got := write.Addr.String(); got != "127.0.0.1:9001" {
+	if got := write.Addr.AddrPort().String(); got != "127.0.0.1:9001" {
 		t.Fatalf("write addr = %q, want %q", got, "127.0.0.1:9001")
 	}
 
@@ -343,7 +343,7 @@ func TestPeerSendQueuesOutboundPayloadAndFlushes(t *testing.T) {
 	}
 
 	write := sock.MustWrite(t, baselineWrites)
-	if got := write.Addr.String(); got != "127.0.0.1:9001" {
+	if got := write.Addr.AddrPort().String(); got != "127.0.0.1:9001" {
 		t.Fatalf("write addr = %q, want %q", got, "127.0.0.1:9001")
 	}
 
@@ -633,7 +633,7 @@ func TestBroadcastFansOutToConnectedPeersOnly(t *testing.T) {
 	}
 
 	write := sock.MustWrite(t, baselineWrites)
-	if got := write.Addr.String(); got != "127.0.0.1:9001" {
+	if got := write.Addr.AddrPort().String(); got != "127.0.0.1:9001" {
 		t.Fatalf("broadcast addr = %q, want %q", got, "127.0.0.1:9001")
 	}
 
@@ -655,16 +655,8 @@ func newTestHost() (*Host, *testsupport.FakeSocket) {
 }
 
 func newConfiguredTestHost(cfg Config) (*Host, *testsupport.FakeSocket) {
-	normalized := DefaultConfig()
-	if cfg.PeerCount != 0 {
-		normalized.PeerCount = cfg.PeerCount
-	}
-	if cfg.ChannelLimit != 0 {
-		normalized.ChannelLimit = cfg.ChannelLimit
-	}
-
 	sock := testsupport.NewFakeSocket()
-	return newHostWithSocket(normalized, sock), sock
+	return newHostWithSocket(cfg, sock), sock
 }
 
 type disconnectNowPeer interface {

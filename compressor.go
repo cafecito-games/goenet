@@ -21,17 +21,3 @@ func (a compressorAdapter) Compress(buffers []core.Buffer, inLimit int, out []by
 func (a compressorAdapter) Decompress(in, out []byte) (int, error) {
 	return a.inner.Decompress(in, out)
 }
-
-type coreCompressorAdapter struct {
-	inner core.Compressor
-}
-
-// Compress adapts the internal core compressor interface to the public form.
-func (a coreCompressorAdapter) Compress(buffers []Buffer, inLimit int, out []byte) (int, error) {
-	return a.inner.Compress(toCoreBuffers(buffers), inLimit, out)
-}
-
-// Decompress adapts the internal core compressor interface to the public form.
-func (a coreCompressorAdapter) Decompress(in, out []byte) (int, error) {
-	return a.inner.Decompress(in, out)
-}

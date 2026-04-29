@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/netip"
 	"sync/atomic"
 	"time"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 	"github.com/cafecito-games/goenet/internal/peer"
-	"github.com/cafecito-games/goenet/internal/protocol"
 	isocket "github.com/cafecito-games/goenet/internal/socket"
 )
 
@@ -151,46 +149,14 @@ func newHost(cfg Config, conn *net.UDPConn) *Host {
 	return host
 }
 
-func normalizeConfig(cfg Config) Config {
-	normalized := DefaultConfig()
-	if cfg.PeerCount != 0 {
-		normalized.PeerCount = cfg.PeerCount
-	}
-	if cfg.ChannelLimit != 0 {
-		normalized.ChannelLimit = cfg.ChannelLimit
-	}
-	if cfg.MTU != 0 {
-		normalized.MTU = cfg.MTU
-	}
-	if cfg.MaximumPacketSize != 0 {
-		normalized.MaximumPacketSize = cfg.MaximumPacketSize
-	}
-	if cfg.MaximumWaitingData != 0 {
-		normalized.MaximumWaitingData = cfg.MaximumWaitingData
-	}
-	if cfg.Checksum != nil {
-		normalized.Checksum = cfg.Checksum
-	}
-	if cfg.Compressor != nil {
-		normalized.Compressor = cfg.Compressor
-	}
-	if cfg.Intercept != nil {
-		normalized.Intercept = cfg.Intercept
-	}
-	if normalized.ChannelLimit == 0 {
-		normalized.ChannelLimit = uint8(protocol.MaximumPeerID >> 4)
-	}
-
-	return normalized
-}
-
 func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
-	normalized := normalizeConfig(cfg)
+	coreCfg := toCoreConfig(cfg)
+	normalized := fromCoreConfig(coreCfg)
 
 	return &Host{
 		config: normalized,
 		socket: sock,
-		engine: engine.NewHost(toCoreConfig(normalized), sock, 0),
+		engine: engine.NewHost(coreCfg, sock, 0),
 		peers:  make(map[*peer.Peer]*Peer),
 	}
 }
@@ -255,7 +221,5 @@ func durationMillis(timeout time.Duration) uint32 {
 }
 
 func coreAddressFromUDPAddr(addr *net.UDPAddr) (core.Address, error) {
-	addrPort := addr.AddrPort()
-	addrPort = netip.AddrPortFrom(addrPort.Addr().Unmap(), addrPort.Port())
-	return core.NewAddress(addrPort, 0)
+	return isocket.AddressFromUDPAddr(addr)
 }

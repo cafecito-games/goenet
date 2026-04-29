@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/testsupport"
 )
 
@@ -28,7 +29,7 @@ func TestFakeSocketReadsScriptedInboundDatagramsAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first ReadPacket() error = %v", err)
 	}
-	if addr != firstAddr {
+	if addr.AddrPort() != firstAddr {
 		t.Fatalf("first ReadPacket() addr = %v, want %v", addr, firstAddr)
 	}
 	if got := string(buf[:n]); got != "first" {
@@ -42,7 +43,7 @@ func TestFakeSocketReadsScriptedInboundDatagramsAndErrors(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("second ReadPacket() n = %d", n)
 	}
-	if addr != (netip.AddrPort{}) {
+	if addr != (core.Address{}) {
 		t.Fatalf("second ReadPacket() addr = %v, want zero", addr)
 	}
 
@@ -50,7 +51,7 @@ func TestFakeSocketReadsScriptedInboundDatagramsAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third ReadPacket() error = %v", err)
 	}
-	if addr != secondAddr {
+	if addr.AddrPort() != secondAddr {
 		t.Fatalf("third ReadPacket() addr = %v, want %v", addr, secondAddr)
 	}
 	if got := string(buf[:n]); got != "second" {
@@ -64,7 +65,7 @@ func TestFakeSocketReadsScriptedInboundDatagramsAndErrors(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("fourth ReadPacket() n = %d", n)
 	}
-	if addr != (netip.AddrPort{}) {
+	if addr != (core.Address{}) {
 		t.Fatalf("fourth ReadPacket() addr = %v, want zero", addr)
 	}
 }
