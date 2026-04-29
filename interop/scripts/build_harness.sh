@@ -16,17 +16,56 @@ require_enet_root() {
   fi
 }
 
+needs_rebuild() {
+  local output="$1"
+  local cache_key_file="$2"
+  local expected_enet_root="$3"
+  shift 3
+
+  if [[ ! -f "$output" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$cache_key_file" ]]; then
+    return 0
+  fi
+
+  if [[ "$(<"$cache_key_file")" != "$expected_enet_root" ]]; then
+    return 0
+  fi
+
+  for dep in "$@"; do
+    if [[ "$dep" -nt "$output" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 build_one() {
   local name="$1"
   local enet_root="$2"
   local source="$interop_dir/cases/$name.c"
   local output="$bin_dir/$name"
+  local cache_key_file="$interop_dir/build/$name.enet_root"
+  local deps=(
+    "$source"
+    "$interop_dir/lib/harness.c"
+    "$interop_dir/include/harness.h"
+    "$interop_dir/scripts/build_harness.sh"
+    "$enet_root/include/enet.h"
+  )
 
   if [[ ! -f "$source" ]]; then
     echo "interop: unknown scenario: $name" >&2
     return 1
   fi
   require_enet_root "$enet_root"
+  if ! needs_rebuild "$output" "$cache_key_file" "$enet_root" "${deps[@]}"; then
+    echo "SKIP $name"
+    return
+  fi
 
   cc -std=c99 -Wall -Wextra -Wno-unused-parameter \
     -I"$interop_dir/include" \
@@ -34,6 +73,8 @@ build_one() {
     "$interop_dir/lib/harness.c" \
     "$source" \
     -o "$output"
+  printf '%s\n' "$enet_root" > "$cache_key_file"
+  echo "BUILD $name"
 }
 
 if [[ "$scenario" == "all" ]]; then

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadInteropConfigRequiresENETSourceDir(t *testing.T) {
@@ -97,6 +98,64 @@ func TestBuildHarnessProducesScenarioBinary(t *testing.T) {
 	}
 }
 
+func TestBuildHarnessSkipsUnchangedScenario(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
+
+	path, _ := runBuildHarness(t, cfg, "go_server_reliable_exchange")
+	before := modTime(t, path)
+	_, output := runBuildHarness(t, cfg, "go_server_reliable_exchange")
+	after := modTime(t, path)
+	if !strings.Contains(output, "SKIP go_server_reliable_exchange") {
+		t.Fatalf("build output = %q", output)
+	}
+	if !before.Equal(after) {
+		t.Fatalf("mod time changed: before=%v after=%v", before, after)
+	}
+}
+
+func TestBuildHarnessRebuildsWhenScenarioChanges(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
+
+	path, _ := runBuildHarness(t, cfg, "go_server_reliable_exchange")
+	before := modTime(t, path)
+	source := scenarioSourcePath("go_server_reliable_exchange")
+	original := mustReadFile(t, source)
+	originalModTime := modTime(t, source)
+	t.Cleanup(func() {
+		mustWriteFile(t, source, original)
+		mustSetModTime(t, source, originalModTime)
+	})
+	mustWriteFile(t, source, original+"\n")
+	mustSetModTime(t, source, before.Add(time.Second))
+	_, output := runBuildHarness(t, cfg, "go_server_reliable_exchange")
+	after := modTime(t, path)
+	if !strings.Contains(output, "BUILD go_server_reliable_exchange") {
+		t.Fatalf("build output = %q", output)
+	}
+	if !after.After(before) {
+		t.Fatalf("mod time did not advance: before=%v after=%v", before, after)
+	}
+}
+
+func TestBuildHarnessRebuildsWhenENETSourceDirChanges(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
+
+	firstRoot := mustCreateENETSourceDir(t, cfg.ENETSourceDir)
+	secondRoot := mustCreateENETSourceDir(t, cfg.ENETSourceDir)
+
+	path, _ := runBuildHarnessWithENETSourceDir(t, firstRoot, "go_server_reliable_exchange")
+	before := modTime(t, path)
+	mustSetModTime(t, filepath.Join(secondRoot, "include", "enet.h"), before.Add(-time.Second))
+	_, output := runBuildHarnessWithENETSourceDir(t, secondRoot, "go_server_reliable_exchange")
+	after := modTime(t, path)
+	if !strings.Contains(output, "BUILD go_server_reliable_exchange") {
+		t.Fatalf("build output = %q", output)
+	}
+	if !after.After(before) {
+		t.Fatalf("mod time did not advance: before=%v after=%v", before, after)
+	}
+}
+
 func TestBuildHarnessRejectsUnknownScenario(t *testing.T) {
 	cmd := exec.Command(filepath.Join(interopDirFromRuntime(), "scripts", "build_harness.sh"), "does_not_exist")
 	cmd.Env = append(baseScriptEnv(t),
@@ -142,8 +201,14 @@ func mustLoadInteropConfigForTest(t *testing.T) interopConfig {
 func runBuildHarness(t *testing.T, cfg interopConfig, scenario string) (string, string) {
 	t.Helper()
 
+	return runBuildHarnessWithENETSourceDir(t, cfg.ENETSourceDir, scenario)
+}
+
+func runBuildHarnessWithENETSourceDir(t *testing.T, enetSourceDir, scenario string) (string, string) {
+	t.Helper()
+
 	cmd := exec.Command(filepath.Join(interopDirFromRuntime(), "scripts", "build_harness.sh"), scenario)
-	cmd.Env = append(baseScriptEnv(t), "ENET_SOURCE_DIR="+cfg.ENETSourceDir)
+	cmd.Env = append(baseScriptEnv(t), "ENET_SOURCE_DIR="+enetSourceDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build_harness.sh failed: %v\n%s", err, output)
