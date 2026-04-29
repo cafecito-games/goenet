@@ -745,6 +745,44 @@ func TestNewHostUsesMaximumChannelCountWhenChannelLimitUnset(t *testing.T) {
 	}
 }
 
+func TestReceiveIncomingAcceptsDatagramsLargerThanConfiguredMTU(t *testing.T) {
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
+		cfg.MTU = 576
+	})
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 2
+
+	payload := append(make([]byte, 0, 700), []byte("oversize-reliable")...)
+	payload = append(payload, make([]byte, 640)...)
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x1200,
+		},
+		iprotocol.SendReliable{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0,
+				ReliableSequenceNumber: 1,
+			},
+			Data: payload,
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != core.EventReceive {
+		t.Fatalf("event type = %d, want %d", event.Type, core.EventReceive)
+	}
+	if got := len(event.Packet.Data); got != len(payload) {
+		t.Fatalf("payload length = %d, want %d", got, len(payload))
+	}
+}
+
 func newReceiveHost(t *testing.T, configure func(*core.Config)) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 

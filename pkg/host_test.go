@@ -115,6 +115,27 @@ func TestLocalAddrPortMatchesBoundUDPAddr(t *testing.T) {
 	}
 }
 
+func TestPeerRemoteAddrMatchesConnectedEndpoint(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0xCAFE)
+
+	addr, ok := peer.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("remote addr type = %T, want *net.UDPAddr", peer.RemoteAddr())
+	}
+	if got := addr.String(); got != "127.0.0.1:9001" {
+		t.Fatalf("remote addr = %q, want %q", got, "127.0.0.1:9001")
+	}
+
+	addrPort := peer.RemoteAddrPort()
+	if !addrPort.IsValid() {
+		t.Fatal("RemoteAddrPort() returned invalid address")
+	}
+	if got := addrPort.String(); got != "127.0.0.1:9001" {
+		t.Fatalf("remote addr port = %q, want %q", got, "127.0.0.1:9001")
+	}
+}
+
 func TestCloseMakesFurtherOperationsFail(t *testing.T) {
 	host, err := Listen("127.0.0.1:0", Config{})
 	if err != nil {

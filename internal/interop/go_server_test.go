@@ -97,3 +97,23 @@ func TestUnreliableExchangeAcrossInterop(t *testing.T) {
 		t.Fatalf("client output missing unreliable payload:\n%s", output)
 	}
 }
+
+func TestGoServerUnsequencedExchange(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
+	mustBuildScenario(t, cfg, "go_server_unsequenced_exchange")
+
+	host := mustListenEngineHost(t)
+	client := startScenario(t, "go_server_unsequenced_exchange",
+		"--host", "127.0.0.1",
+		"--port", strconv.Itoa(host.Port()),
+		"--expect", "go-unsequenced",
+	)
+
+	connect := waitForEngineEventType(t, host.Engine, core.EventConnect)
+	mustSendEnginePacketWithFlags(t, host.Engine, connect.Peer, "go-unsequenced", core.PacketFlagUnsequenced)
+
+	output := mustWaitProcessSuccess(t, client)
+	if !strings.Contains(output, "CONNECT") || !strings.Contains(output, "RECEIVE go-unsequenced") {
+		t.Fatalf("client output mismatch:\n%s", output)
+	}
+}

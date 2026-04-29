@@ -46,6 +46,7 @@ type Host struct {
 	runtime                    map[*peer.Peer]*peerRuntime
 	intercepted                *Event
 	nextConnectID              uint32
+	sessionIDSeed              uint8
 }
 
 // NewHost constructs an engine host around the provided socket and config snapshot.
@@ -86,6 +87,7 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 		dispatchSet:   make(map[*peer.Peer]struct{}),
 		runtime:       make(map[*peer.Peer]*peerRuntime),
 		nextConnectID: randomConnectIDSeed(),
+		sessionIDSeed: randomSessionIDSeed(),
 	}
 	for index := 0; index < cfg.PeerCount; index++ {
 		host.peers = append(host.peers, host.newPeerSlot(index))
@@ -343,7 +345,7 @@ func (h *Host) configurePeer(p *peer.Peer, index int, addr core.Address, state c
 		outgoingPeerID = protocolMaximumPeerID
 	}
 
-	h.initializePeer(p, index, addr, state, outgoingPeerID, 0xFF, peerSessionIDForIndex(index))
+	h.initializePeer(p, index, addr, state, outgoingPeerID, 0xFF, peerSessionIDForIndex(index, h.sessionIDSeed))
 	p.Channels = channels
 	h.runtime[p] = defaultPeerRuntime()
 	return p
@@ -405,6 +407,14 @@ func randomConnectIDSeed() uint32 {
 	return binary.BigEndian.Uint32(b[:])
 }
 
+func randomSessionIDSeed() uint8 {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
+	}
+	return b[0] % 3
+}
+
 func checkedUint32FromInt(value int) uint32 {
 	if value < 0 || uint64(value) > math.MaxUint32 {
 		panic(fmt.Sprintf("engine: int value %d overflows uint32", value))
@@ -421,8 +431,8 @@ func checkedUint16FromInt(value int) uint16 {
 	return uint16(value)
 }
 
-func peerSessionIDForIndex(index int) uint8 {
-	return [...]uint8{1, 2, 3}[index%3]
+func peerSessionIDForIndex(index int, seed uint8) uint8 {
+	return [...]uint8{1, 2, 3}[(index+int(seed%3))%3]
 }
 
 func lowUint16FromUint32(value uint32) uint16 {
@@ -523,6 +533,7 @@ func (h *Host) checkTimeouts() (Event, bool) {
 			p.TotalPacketsLost++
 			cmd.RoundTripTimeout = p.RoundTripTime + 4*p.RoundTripTimeVariance
 
+			p.UnindexSentReliableCommand(cmd)
 			p.SentReliableCommands.Remove(elem)
 			if cmd.Packet != nil {
 				if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {

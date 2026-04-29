@@ -25,6 +25,7 @@ func TestREADMETracksCurrentPublicAPI(t *testing.T) {
 		"Flush",
 		"Broadcast",
 		"LocalAddr",
+		"RemoteAddr",
 		"Close",
 		"Peer.Send",
 		"DisconnectLater",

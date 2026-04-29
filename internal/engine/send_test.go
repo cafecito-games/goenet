@@ -756,6 +756,49 @@ func TestUnsequencedSendQueuesOutboundCommandAndFlushes(t *testing.T) {
 	}
 }
 
+func TestFlushCapsDatagramsPerCall(t *testing.T) {
+	host, sock := newSizedTestHost(t, 24)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	for i := 0; i < int(iprotocol.MaximumPacketCommands)+1; i++ {
+		if err := host.Send(peer.Raw, 0, &core.Packet{Data: []byte("1234567890")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sock.WriteCount(), int(iprotocol.MaximumPacketCommands); got != want {
+		t.Fatalf("first Flush() wrote %d datagrams, want %d", got, want)
+	}
+	if got := peer.OutgoingCount(); got != 1 {
+		t.Fatalf("remaining queued commands after first Flush = %d, want 1", got)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := sock.WriteCount(); got != int(iprotocol.MaximumPacketCommands)+1 {
+		t.Fatalf("total writes after second Flush = %d, want %d", got, int(iprotocol.MaximumPacketCommands)+1)
+	}
+}
+
+func TestCommandWireSizePrefersExplicitWireSizer(t *testing.T) {
+	cmd := &ipeer.OutgoingCommand{
+		Command: ipeer.Command{
+			Header: ipeer.Header{Command: iprotocol.CommandPing, ChannelID: 0},
+			Payload: wireSizedOnlyCommand{
+				size: 17,
+			},
+		},
+	}
+
+	if got := commandWireSize(cmd); got != 17 {
+		t.Fatalf("commandWireSize() = %d, want 17", got)
+	}
+}
+
 func newTestHost(t *testing.T) (*Host, *testsupport.FakeSocket) {
 	t.Helper()
 
@@ -930,6 +973,18 @@ func bytesOfLen(n int, b byte) []byte {
 		buf[i] = b
 	}
 	return buf
+}
+
+type wireSizedOnlyCommand struct {
+	size int
+}
+
+func (c wireSizedOnlyCommand) MarshalBinary([]byte) []byte {
+	panic("MarshalBinary should not be called when WireSize is available")
+}
+
+func (c wireSizedOnlyCommand) WireSize() int {
+	return c.size
 }
 
 type testPeer struct {

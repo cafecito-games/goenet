@@ -2,9 +2,12 @@ package goenet
 
 import (
 	"context"
+	"net"
+	"net/netip"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
+	isocket "github.com/cafecito-games/goenet/internal/socket"
 )
 
 // PeerState mirrors ENetPeerState ordinal values.
@@ -77,6 +80,24 @@ func (p *Peer) State() PeerState {
 	return p.state
 }
 
+// RemoteAddr returns the peer's remote network address when available.
+//
+// The returned net.Addr is a defensive copy so callers cannot mutate peer state.
+// Prefer RemoteAddrPort for new code when you want an immutable address value.
+func (p *Peer) RemoteAddr() net.Addr {
+	return cloneNetAddr(p.remoteUDPAddr())
+}
+
+// RemoteAddrPort returns the peer's remote address as an immutable netip.AddrPort.
+func (p *Peer) RemoteAddrPort() netip.AddrPort {
+	raw, unlock, err := p.lockedRaw()
+	if err != nil {
+		return netip.AddrPort{}
+	}
+	defer unlock()
+	return raw.Address.AddrPort()
+}
+
 // Send queues a packet for transmission to the peer.
 func (p *Peer) Send(channelID uint8, packet *Packet) error {
 	corePacket := toCorePacket(packet)
@@ -147,4 +168,13 @@ func (p *Peer) Reset() {
 
 func fromCorePeerState(state core.PeerState) PeerState {
 	return PeerState(state)
+}
+
+func (p *Peer) remoteUDPAddr() *net.UDPAddr {
+	raw, unlock, err := p.lockedRaw()
+	if err != nil {
+		return nil
+	}
+	defer unlock()
+	return isocket.UDPAddrFromAddress(raw.Address)
 }

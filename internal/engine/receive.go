@@ -21,6 +21,7 @@ const (
 	peerUnsequencedWindowSize           = 1024
 	peerFreeUnsequencedWindows          = 32
 	protocolMaximumFragmentCount uint32 = 1024 * 1024
+	maximumUDPDatagramSize              = 65535
 )
 
 type inboundDisposition uint8
@@ -92,7 +93,7 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 }
 
 func (h *Host) receiveIncoming(ctx context.Context) error {
-	buf := make([]byte, h.config.MTU)
+	buf := make([]byte, maximumUDPDatagramSize)
 	for packets := 0; packets < 256; packets++ {
 		n, addr, err := h.socket.ReadPacket(ctx, buf)
 		if err != nil {
@@ -1176,11 +1177,25 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 }
 
 func (h *Host) removeSentReliableCommand(p *peer.Peer, reliableSequenceNumber uint16, channelID uint8) protocol.Command {
+	if indexed := p.RemoveIndexedSentReliableCommand(reliableSequenceNumber, channelID); indexed != nil {
+		cmd := p.SentReliableCommands.Remove(indexed)
+		if cmd.Packet != nil {
+			if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
+				p.ReliableDataInTransit = 0
+			} else {
+				p.ReliableDataInTransit -= uint32(cmd.FragmentLength)
+			}
+		}
+		h.updateNextTimeout(p)
+		return cmd.Command.Header.Command
+	}
+
 	for elem := p.SentReliableCommands.Front(); elem != nil; elem = elem.Next() {
 		cmd := elem.Value()
 		if cmd.ReliableSequenceNumber != reliableSequenceNumber || cmd.Command.Header.ChannelID != channelID {
 			continue
 		}
+		p.UnindexSentReliableCommand(cmd)
 		p.SentReliableCommands.Remove(elem)
 		if cmd.Packet != nil {
 			if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
