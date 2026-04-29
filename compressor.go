@@ -1,10 +1,9 @@
 package goenet
 
-import "github.com/cafecito-games/goenet/internal/core"
-
 // Compressor compresses and decompresses ENet payload bytes around the protocol header.
+// buffers passed to Compress are concatenated input.
 type Compressor interface {
-	Compress(buffers []Buffer, inLimit int, out []byte) (int, error)
+	Compress(buffers [][]byte, inLimit int, out []byte) (int, error)
 	Decompress(in []byte, out []byte) (int, error)
 }
 
@@ -13,8 +12,8 @@ type compressorAdapter struct {
 }
 
 // Compress adapts the public compressor interface to the internal core form.
-func (a compressorAdapter) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
-	return a.inner.Compress(fromCoreBuffers(buffers), inLimit, out)
+func (a compressorAdapter) Compress(buffers [][]byte, inLimit int, out []byte) (int, error) {
+	return a.inner.Compress(buffers, inLimit, out)
 }
 
 // Decompress adapts the public compressor interface to the internal core form.

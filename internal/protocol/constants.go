@@ -27,6 +27,8 @@ const (
 	MaximumChannelCount uint32 = 255
 	// MaximumPeerID is the peer ID mask ENet stores in packet headers.
 	MaximumPeerID uint16 = 0x0FFF
+	// UnsequencedWindowSize is ENet's per-peer unsequenced acknowledgment window in commands.
+	UnsequencedWindowSize uint32 = 1024
 
 	// CommandNone is a zero-value placeholder and not a valid on-the-wire command.
 	CommandNone Command = 0

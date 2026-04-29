@@ -1,8 +1,6 @@
 package goenet
 
 import (
-	"fmt"
-
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 )
@@ -52,10 +50,10 @@ func (p *Peer) State() PeerState {
 // Send queues a packet for transmission to the peer.
 func (p *Peer) Send(channelID uint8, packet *Packet) error {
 	if p == nil || p.host == nil || p.raw == nil {
-		return fmt.Errorf("goenet: nil peer")
+		return ErrNilPeer
 	}
 	if p.host.closed.Load() {
-		return errHostClosed
+		return ErrHostClosed
 	}
 
 	return p.host.engine.Send(p.raw, channelID, toCorePacket(packet))
@@ -64,10 +62,10 @@ func (p *Peer) Send(channelID uint8, packet *Packet) error {
 // Disconnect queues a graceful ENet-compatible disconnect request.
 func (p *Peer) Disconnect(data uint32) error {
 	if p == nil || p.host == nil || p.raw == nil {
-		return fmt.Errorf("goenet: nil peer")
+		return ErrNilPeer
 	}
 	if p.host.closed.Load() {
-		return errHostClosed
+		return ErrHostClosed
 	}
 	if err := p.host.engine.Disconnect(p.raw, data); err != nil {
 		return err
@@ -80,10 +78,10 @@ func (p *Peer) Disconnect(data uint32) error {
 // DisconnectNow forcefully notifies the remote peer, flushes immediately, and resets locally.
 func (p *Peer) DisconnectNow(data uint32) error {
 	if p == nil || p.host == nil || p.raw == nil {
-		return fmt.Errorf("goenet: nil peer")
+		return ErrNilPeer
 	}
 	if p.host.closed.Load() {
-		return errHostClosed
+		return ErrHostClosed
 	}
 	if err := p.host.engine.DisconnectNow(p.raw, data); err != nil {
 		return err
@@ -96,10 +94,10 @@ func (p *Peer) DisconnectNow(data uint32) error {
 // DisconnectLater defers disconnect until outbound reliable work drains.
 func (p *Peer) DisconnectLater(data uint32) error {
 	if p == nil || p.host == nil || p.raw == nil {
-		return fmt.Errorf("goenet: nil peer")
+		return ErrNilPeer
 	}
 	if p.host.closed.Load() {
-		return errHostClosed
+		return ErrHostClosed
 	}
 	if err := p.host.engine.DisconnectLater(p.raw, data); err != nil {
 		return err

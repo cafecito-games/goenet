@@ -103,11 +103,11 @@ type captureChecksummer struct {
 	calls int
 }
 
-func (c *captureChecksummer) Checksum(buffers []Buffer) uint32 {
+func (c *captureChecksummer) Checksum(buffers [][]byte) uint32 {
 	c.calls++
 	var sum uint32
 	for _, buffer := range buffers {
-		sum += uint32(len(buffer.Data))
+		sum += uint32(len(buffer))
 	}
 	return sum + 1
 }
@@ -116,7 +116,7 @@ type captureCompressor struct {
 	compressCalls int
 }
 
-func (c *captureCompressor) Compress(buffers []Buffer, inLimit int, out []byte) (int, error) {
+func (c *captureCompressor) Compress(buffers [][]byte, inLimit int, out []byte) (int, error) {
 	c.compressCalls++
 	if len(out) == 0 {
 		return 0, nil

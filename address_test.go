@@ -77,7 +77,6 @@ func TestExportedTypesRemainOwnedByPublicPackage(t *testing.T) {
 	var (
 		address         goenet.Address
 		packet          goenet.Packet
-		buffer          goenet.Buffer
 		eventType       goenet.EventType
 		packetFlag      goenet.PacketFlag
 		peerState       goenet.PeerState
@@ -90,7 +89,6 @@ func TestExportedTypesRemainOwnedByPublicPackage(t *testing.T) {
 	}{
 		{name: "Address", typ: reflect.TypeOf(address)},
 		{name: "Packet", typ: reflect.TypeOf(packet)},
-		{name: "Buffer", typ: reflect.TypeOf(buffer)},
 		{name: "EventType", typ: reflect.TypeOf(eventType)},
 		{name: "PacketFlag", typ: reflect.TypeOf(packetFlag)},
 		{name: "PeerState", typ: reflect.TypeOf(peerState)},

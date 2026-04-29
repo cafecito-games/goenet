@@ -63,7 +63,9 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 		return event, nil
 	}
 	if timeutil.Difference(h.serviceTime, h.bandwidthThrottleEpoch) >= defaultBandwidthThrottleInterval {
-		h.bandwidthThrottle()
+		if err := h.bandwidthThrottle(); err != nil {
+			return Event{}, err
+		}
 	}
 	if event, ok := h.checkTimeouts(); ok {
 		return event, nil
@@ -94,7 +96,8 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 	for packets := 0; packets < 256; packets++ {
 		n, addr, err := h.socket.ReadPacket(ctx, buf)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			// EOF or a tick-scoped deadline both mean "no more packets to drain".
+			if errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) {
 				return nil
 			}
 			return err
@@ -177,7 +180,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		checksumOffset := protocolHeaderSize
 		desired := binary.LittleEndian.Uint32(workingPayload[checksumOffset : checksumOffset+4])
 		binary.LittleEndian.PutUint32(workingPayload[checksumOffset:checksumOffset+4], incomingChecksumSeed(currentPeer))
-		if h.config.Checksum.Checksum([]core.Buffer{{Data: workingPayload}}) != desired {
+		if h.config.Checksum.Checksum([][]byte{workingPayload}) != desired {
 			return nil
 		}
 	}

@@ -1,6 +1,14 @@
 package peer
 
-import "github.com/cafecito-games/goenet/internal/core"
+import (
+	"github.com/cafecito-games/goenet/internal/core"
+	"github.com/cafecito-games/goenet/internal/protocol"
+)
+
+// Compile-time guarantee that the peer's UnsequencedWindow bitmap matches
+// ENet's documented unsequenced window size (1024 bits / 32 uint32s).
+const _ = uint(len(Peer{}.UnsequencedWindow)*32) - uint(protocol.UnsequencedWindowSize)
+const _ = uint(protocol.UnsequencedWindowSize) - uint(len(Peer{}.UnsequencedWindow)*32)
 
 // Peer carries the internal ENet-oriented state for a remote endpoint.
 type Peer struct {
@@ -78,8 +86,14 @@ func (p *Peer) CanQueueWaitingData(length, maximumWaitingData uint32) bool {
 	return p.TotalWaitingData <= maximumWaitingData-length
 }
 
-// AddWaitingData increments the peer's queued receive-byte count.
+// AddWaitingData increments the peer's queued receive-byte count, saturating at
+// math.MaxUint32 rather than wrapping. Callers should gate on CanQueueWaitingData
+// first; the saturation here defends against drift if that contract is missed.
 func (p *Peer) AddWaitingData(length uint32) {
+	if length > ^uint32(0)-p.TotalWaitingData {
+		p.TotalWaitingData = ^uint32(0)
+		return
+	}
 	p.TotalWaitingData += length
 }
 

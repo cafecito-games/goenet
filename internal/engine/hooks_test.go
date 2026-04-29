@@ -200,9 +200,9 @@ func (fn interceptFunc) Intercept(addr netip.AddrPort, payload []byte) (core.Int
 	return fn(addr, payload)
 }
 
-type checksumFunc func([]core.Buffer) uint32
+type checksumFunc func([][]byte) uint32
 
-func (fn checksumFunc) Checksum(buffers []core.Buffer) uint32 {
+func (fn checksumFunc) Checksum(buffers [][]byte) uint32 {
 	return fn(buffers)
 }
 
@@ -213,7 +213,7 @@ type testCompressor struct {
 	stored          map[byte][]byte
 }
 
-func (c *testCompressor) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
+func (c *testCompressor) Compress(buffers [][]byte, inLimit int, out []byte) (int, error) {
 	c.compressCalls++
 	data := flattenBuffers(buffers)
 	if len(data) > inLimit {
@@ -249,7 +249,7 @@ func marshalCompressedDatagram(t *testing.T, compressor core.Compressor, header 
 
 	body := marshalDatagram(iprotocol.Header{}, commands...)[2:]
 	compressed := make([]byte, len(body)+8)
-	n, err := compressor.Compress([]core.Buffer{{Data: body}}, len(body), compressed)
+	n, err := compressor.Compress([][]byte{body}, len(body), compressed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,11 +266,7 @@ func checksumDatagram(t *testing.T, seed uint32, checksummer core.Checksummer, h
 	bodyBytes := command.MarshalBinary(nil)
 	checksumBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(checksumBytes, seed)
-	sum := checksummer.Checksum([]core.Buffer{
-		{Data: headerBytes},
-		{Data: checksumBytes},
-		{Data: bodyBytes},
-	})
+	sum := checksummer.Checksum([][]byte{headerBytes, checksumBytes, bodyBytes})
 	binary.LittleEndian.PutUint32(checksumBytes, sum)
 
 	wire := append([]byte(nil), headerBytes...)
@@ -279,24 +275,24 @@ func checksumDatagram(t *testing.T, seed uint32, checksummer core.Checksummer, h
 	return wire
 }
 
-func testChecksum(buffers []core.Buffer) uint32 {
+func testChecksum(buffers [][]byte) uint32 {
 	var sum uint32
 	for _, buffer := range buffers {
-		for _, b := range buffer.Data {
+		for _, b := range buffer {
 			sum = (sum << 5) - sum + uint32(b)
 		}
 	}
 	return sum
 }
 
-func flattenBuffers(buffers []core.Buffer) []byte {
+func flattenBuffers(buffers [][]byte) []byte {
 	total := 0
 	for _, buffer := range buffers {
-		total += len(buffer.Data)
+		total += len(buffer)
 	}
 	out := make([]byte, 0, total)
 	for _, buffer := range buffers {
-		out = append(out, buffer.Data...)
+		out = append(out, buffer...)
 	}
 	return out
 }

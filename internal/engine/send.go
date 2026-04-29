@@ -306,7 +306,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 	if h.config.Compressor != nil {
 		compressed := make([]byte, len(body))
-		n, err := h.config.Compressor.Compress([]core.Buffer{{Data: body}}, len(body), compressed)
+		n, err := h.config.Compressor.Compress([][]byte{body}, len(body), compressed)
 		if err != nil {
 			return preparedDatagram{}, false, err
 		}
@@ -322,11 +322,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	if h.config.Checksum != nil {
 		checksumBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(checksumBytes, outgoingChecksumSeed(p))
-		sum := h.config.Checksum.Checksum([]core.Buffer{
-			{Data: headerBytes},
-			{Data: checksumBytes},
-			{Data: body},
-		})
+		sum := h.config.Checksum.Checksum([][]byte{headerBytes, checksumBytes, body})
 		binary.LittleEndian.PutUint32(checksumBytes, sum)
 		payload = append(payload, checksumBytes...)
 	}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -79,11 +80,12 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	}
 
 	host := &Host{
-		config:      cfg,
-		socket:      sock,
-		serviceTime: serviceTime,
-		dispatchSet: make(map[*peer.Peer]struct{}),
-		runtime:     make(map[*peer.Peer]*peerRuntime),
+		config:        cfg,
+		socket:        sock,
+		serviceTime:   serviceTime,
+		dispatchSet:   make(map[*peer.Peer]struct{}),
+		runtime:       make(map[*peer.Peer]*peerRuntime),
+		nextConnectID: randomConnectIDSeed(),
 	}
 	for index := 0; index < cfg.PeerCount; index++ {
 		host.peers = append(host.peers, host.newPeerSlot(index))
@@ -92,7 +94,17 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	return host
 }
 
+// Peers returns the internal peer slot slice in stable index order.
+// The returned slice aliases internal state and must be treated as read-only.
+func (h *Host) Peers() []*peer.Peer {
+	return h.peers
+}
+
 // AddPeer reserves or extends a peer slot with the provided address and state.
+//
+// AddPeer is exposed only as a test-construction helper so harnesses can bypass
+// the connect handshake. Production code paths must use Connect or accept inbound
+// connections; do not call AddPeer from non-test callers.
 func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 	for index, candidate := range h.peers {
 		if candidate != nil && candidate.State == core.PeerStateDisconnected {
@@ -371,6 +383,18 @@ func (h *Host) nextPeerConnectID() uint32 {
 	return h.nextConnectID
 }
 
+// randomConnectIDSeed seeds the per-host connect ID counter from crypto/rand so
+// peers can disambiguate stale datagrams across host restarts. Failure to read
+// from the OS entropy source is non-fatal — the counter still produces unique
+// monotonic IDs within a single host lifetime.
+func randomConnectIDSeed() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
+	}
+	return binary.BigEndian.Uint32(b[:])
+}
+
 func checkedUint32FromInt(value int) uint32 {
 	if value < 0 || uint64(value) > math.MaxUint32 {
 		panic(fmt.Sprintf("engine: int value %d overflows uint32", value))
@@ -499,20 +523,20 @@ func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
 	return event, true
 }
 
-func (h *Host) bandwidthThrottle() {
+func (h *Host) bandwidthThrottle() error {
 	elapsedTime := h.serviceTime - h.bandwidthThrottleEpoch
 	if elapsedTime < defaultBandwidthThrottleInterval {
-		return
+		return nil
 	}
 	if h.outgoingBandwidth == 0 && h.incomingBandwidth == 0 {
-		return
+		return nil
 	}
 
 	h.bandwidthThrottleEpoch = h.serviceTime
 
 	peersRemaining := h.connectedPeerCount()
 	if peersRemaining == 0 {
-		return
+		return nil
 	}
 
 	dataTotal := ^uint32(0)
@@ -591,7 +615,7 @@ func (h *Host) bandwidthThrottle() {
 	}
 
 	if !h.recalculateBandwidthLimits {
-		return
+		return nil
 	}
 
 	h.recalculateBandwidthLimits = false
@@ -631,7 +655,7 @@ func (h *Host) bandwidthThrottle() {
 			incomingLimit = p.OutgoingBandwidth
 		}
 
-		_ = h.queueOutgoingControlCommand(p, peer.Command{
+		if err := h.queueOutgoingControlCommand(p, peer.Command{
 			Header: peer.Header{
 				Command:   protocol.CommandBandwidthLimit,
 				ChannelID: 0xFF,
@@ -641,8 +665,12 @@ func (h *Host) bandwidthThrottle() {
 				IncomingBandwidth: incomingLimit,
 				OutgoingBandwidth: h.outgoingBandwidth,
 			},
-		})
+		}); err != nil {
+			return fmt.Errorf("engine: bandwidth limit broadcast: %w", err)
+		}
 	}
+
+	return nil
 }
 
 func (h *Host) connectedPeerCount() uint32 {
