@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-default_enet_root="/Users/christian/CafecitoGames/enet"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+git_common_dir="$(git -C "$script_dir" rev-parse --git-common-dir)"
+if [[ "$git_common_dir" != /* ]]; then
+  git_common_dir="$(cd "$script_dir/$git_common_dir" && pwd)"
+fi
+repo_root="$(cd "$git_common_dir/.." && pwd)"
+default_enet_root="$(cd "$repo_root/.." && pwd)/enet"
 enet_root="${ENET_SOURCE_DIR:-$default_enet_root}"
-output="${1:-$(cd "$(dirname "$0")" && pwd)/enet-harness}"
+output="${1:-$script_dir/enet-harness}"
 
 if [[ ! -f "$enet_root/include/enet.h" ]]; then
-  echo "expected ENet header at $enet_root/include/enet.h" >&2
+  echo "expected ENet header at $enet_root/include/enet.h; set ENET_SOURCE_DIR to override" >&2
   exit 1
 fi
 

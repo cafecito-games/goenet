@@ -12,7 +12,7 @@ Close the remaining ENet disconnect behavior gap for handshake states and expose
 
 ## Required ENet Behavior
 
-Based on `/Users/christian/CafecitoGames/enet/include/enet.h`:
+Based on the ENet reference header used for local interop and protocol checks:
 
 - `enet_peer_disconnect()` always resets peer queues first.
 - If the peer is `CONNECTED` or `DISCONNECT_LATER`, it queues `DISCONNECT | ACKNOWLEDGE`, transitions to `DISCONNECTING`, and completes later through the normal service path.

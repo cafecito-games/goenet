@@ -10,7 +10,7 @@
 
 ## Compatibility Target
 
-`goenet` is developed against the local ENet fork at `/Users/christian/CafecitoGames/enet`. Interoperability checks in [`interop/`](./interop) build and exercise that fork directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it.
+`goenet` is developed against a local ENet fork checkout. Interoperability checks in [`interop/`](./interop) build and exercise that fork directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness looks for a sibling `../enet` checkout by default, or uses `ENET_SOURCE_DIR` when set.
 
 ## Installation
 

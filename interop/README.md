@@ -4,7 +4,7 @@ This directory contains the cross-language interoperability coverage for `goenet
 
 ## Source Of Truth
 
-The harness builds against the local ENet fork at `/Users/christian/CafecitoGames/enet` by default. Override that path with `ENET_SOURCE_DIR` when needed.
+The harness builds against a sibling `../enet` checkout by default. Override that path with `ENET_SOURCE_DIR` when needed.
 
 The current fork layout expected by this repo is:
 

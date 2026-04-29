@@ -185,7 +185,6 @@ func buildHarness(t *testing.T) string {
 
 	output := filepath.Join(t.TempDir(), "enet-harness")
 	cmd := exec.Command(script, output)
-	cmd.Env = append(os.Environ(), "ENET_SOURCE_DIR=/Users/christian/CafecitoGames/enet")
 	result, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build harness: %v\n%s", err, result)

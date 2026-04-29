@@ -6,7 +6,7 @@ Build `github.com/cafecito-games/goenet` as a pure Go 1.26 implementation of ENe
 
 ## Scope
 
-This project is a full port, not a reduced subset. The initial implementation must cover the complete ENet feature set represented by the upstream source in `/Users/christian/CafecitoGames/enet`, including:
+This project is a full port, not a reduced subset. The initial implementation must cover the complete ENet feature set represented by the upstream ENet reference source used by this repo, including:
 
 - connection handshake and peer state machine
 - reliable, unreliable, and unsequenced delivery
@@ -35,7 +35,7 @@ The public API does not need to mirror ENet symbol-for-symbol. Compatibility is 
 
 ## Upstream Compatibility Target
 
-The reference implementation is the ENet source tree in `~/CafecitoGames/enet`, specifically the single-header fork exposing ENet `2.6.5` constants and protocol layout. The Go implementation should treat that source as the behavioral oracle for:
+The reference implementation is the ENet source tree used for local interop and protocol checks, specifically the single-header fork exposing ENet `2.6.5` constants and protocol layout. The Go implementation should treat that source as the behavioral oracle for:
 
 - protocol constants such as MTU/window/channel limits
 - command numbering and header flags
@@ -287,7 +287,7 @@ If an explicit `Release` method is introduced for performance, it should be opti
 
 ## Project Scaffolding
 
-Mirror the proven project setup from `/Users/christian/CafecitoGames/gogdproto`, adapted for this library.
+Mirror the proven project setup from the existing CafecitoGames Go networking projects, adapted for this library.
 
 ### Go Module
 
