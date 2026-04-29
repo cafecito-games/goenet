@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 func TestNewAddressPreservesIPv6AddrPortAndScopeID(t *testing.T) {
@@ -98,7 +98,7 @@ func TestExportedTypesRemainOwnedByPublicPackage(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		if got, want := tc.typ.PkgPath(), "github.com/cafecito-games/goenet"; got != want {
+		if got, want := tc.typ.PkgPath(), "github.com/cafecito-games/goenet/pkg"; got != want {
 			t.Fatalf("%s package path = %q, want %q", tc.name, got, want)
 		}
 	}

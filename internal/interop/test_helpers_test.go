@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/engine"
 	"github.com/cafecito-games/goenet/internal/peer"
 	isocket "github.com/cafecito-games/goenet/internal/socket"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 type interopConfig struct {

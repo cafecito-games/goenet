@@ -10,7 +10,7 @@ import (
 func TestREADMETracksCurrentPublicAPI(t *testing.T) {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join(".", "README.md"))
+	data, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

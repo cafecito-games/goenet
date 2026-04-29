@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 func TestGoClientReliableExchange(t *testing.T) {

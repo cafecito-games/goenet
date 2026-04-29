@@ -3,7 +3,7 @@ package goenet_test
 import (
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 func TestPackageSurfaceCompiles(t *testing.T) {

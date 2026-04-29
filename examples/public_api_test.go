@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 func TestPublicAPIListenAndConnectSmoke(t *testing.T) {

@@ -3,7 +3,7 @@ package examples_test
 import (
 	"fmt"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 func ExampleListen() {

@@ -18,11 +18,11 @@ func TestREADMECoversInteropWorkflow(t *testing.T) {
 	readme := string(data)
 
 	required := []string{
-		"cp interop/.env.example interop/.env",
+		"cp internal/interop/.env.example internal/interop/.env",
 		"ENET_SOURCE_DIR",
 		"task interop:test",
 		"build step still runs on every invocation, but only rebuilds scenarios whose inputs changed",
-		"interop/cases/",
+		"internal/interop/cases/",
 		"one scenario entrypoint per `.c` file",
 	}
 	for _, needle := range required {

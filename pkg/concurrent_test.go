@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 // TestHostConcurrentServiceAndOps verifies the documented "Host is safe for

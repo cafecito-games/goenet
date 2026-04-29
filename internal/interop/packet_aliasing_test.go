@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 // TestPacketDataBufferReuseSafeAcrossInterop verifies the M1 fix: goenet copies

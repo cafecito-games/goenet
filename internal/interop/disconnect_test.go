@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/goenet"
 	"github.com/cafecito-games/goenet/internal/core"
+	goenet "github.com/cafecito-games/goenet/pkg"
 )
 
 const (
