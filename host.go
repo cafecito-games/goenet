@@ -19,11 +19,12 @@ var errHostClosed = errors.New("goenet: host closed")
 
 // Host is the public root for ENet-compatible peer management.
 type Host struct {
-	config Config
-	socket isocket.DatagramSocket
-	engine *engine.Host
-	peers  map[*peer.Peer]*Peer
-	closed atomic.Bool
+	config    Config
+	localAddr net.Addr
+	socket    isocket.DatagramSocket
+	engine    *engine.Host
+	peers     map[*peer.Peer]*Peer
+	closed    atomic.Bool
 }
 
 // Listen creates a public host bound to addr.
@@ -54,6 +55,15 @@ func NewHost(cfg Config) (*Host, error) {
 // Config returns the host configuration snapshot.
 func (h *Host) Config() Config {
 	return h.config
+}
+
+// LocalAddr returns the host's bound local network address when available.
+func (h *Host) LocalAddr() net.Addr {
+	if h == nil {
+		return nil
+	}
+
+	return cloneNetAddr(h.localAddr)
 }
 
 // Connect initiates an outbound ENet-compatible connection.
@@ -136,7 +146,9 @@ func (h *Host) Close() error {
 
 func newHost(cfg Config, conn *net.UDPConn) *Host {
 	sock := isocket.NewUDP(conn)
-	return newHostWithSocket(cfg, sock)
+	host := newHostWithSocket(cfg, sock)
+	host.localAddr = cloneNetAddr(conn.LocalAddr())
+	return host
 }
 
 func normalizeConfig(cfg Config) Config {
@@ -181,6 +193,23 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 		engine: engine.NewHost(toCoreConfig(normalized), sock, 0),
 		peers:  make(map[*peer.Peer]*Peer),
 	}
+}
+
+func cloneNetAddr(addr net.Addr) net.Addr {
+	if addr == nil {
+		return nil
+	}
+
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return addr
+	}
+
+	cloned := *udpAddr
+	if udpAddr.IP != nil {
+		cloned.IP = append(net.IP(nil), udpAddr.IP...)
+	}
+	return &cloned
 }
 
 func (h *Host) wrapPeer(raw *peer.Peer) *Peer {

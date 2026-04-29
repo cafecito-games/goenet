@@ -9,12 +9,14 @@ static void harness_init_defaults(harness_config *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->host = "127.0.0.1";
     cfg->port = 7777;
+    cfg->peer_count = 1;
     cfg->timeout_ms = 5000;
 }
 
 void harness_usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s [--host HOST] [--port PORT] [--send DATA] [--expect DATA]\n",
+            "usage: %s [--host HOST] [--port PORT] [--send DATA] [--expect DATA] "
+            "[--peer-count N] [--timeout-ms MS]\n",
             argv0);
 }
 
@@ -41,6 +43,24 @@ bool harness_parse_args(int argc, char **argv, harness_config *cfg) {
         }
         if (strcmp(argv[i], "--expect") == 0 && i + 1 < argc) {
             cfg->expect_payload = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--peer-count") == 0 && i + 1 < argc) {
+            long value = strtol(argv[++i], NULL, 10);
+            if (value < 1 || value > 1024) {
+                fprintf(stderr, "invalid peer count: %ld\n", value);
+                return false;
+            }
+            cfg->peer_count = (int)value;
+            continue;
+        }
+        if (strcmp(argv[i], "--timeout-ms") == 0 && i + 1 < argc) {
+            long value = strtol(argv[++i], NULL, 10);
+            if (value < 1 || value > 60000) {
+                fprintf(stderr, "invalid timeout: %ld\n", value);
+                return false;
+            }
+            cfg->timeout_ms = (int)value;
             continue;
         }
 

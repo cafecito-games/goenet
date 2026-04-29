@@ -11,6 +11,7 @@ typedef struct {
     uint16_t port;
     const char *send_payload;
     const char *expect_payload;
+    int peer_count;
     int timeout_ms;
 } harness_config;
 

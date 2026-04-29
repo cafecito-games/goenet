@@ -2,6 +2,7 @@ package goenet
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -26,6 +27,29 @@ func TestListenReturnsUsableHost(t *testing.T) {
 	}
 }
 
+func TestListenExposesBoundLocalAddr(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{PeerCount: 1, ChannelLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	addr, ok := host.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("local addr type = %T, want *net.UDPAddr", host.LocalAddr())
+	}
+	if addr.Port == 0 {
+		t.Fatal("expected non-zero bound port")
+	}
+	if !addr.IP.IsLoopback() {
+		t.Fatalf("local addr IP = %v, want loopback", addr.IP)
+	}
+}
+
 func TestNewHostReturnsClientCapableHost(t *testing.T) {
 	host, err := NewHost(Config{PeerCount: 1, ChannelLimit: 1})
 	if err != nil {
@@ -39,6 +63,26 @@ func TestNewHostReturnsClientCapableHost(t *testing.T) {
 
 	if host.Config().ChannelLimit != 1 {
 		t.Fatalf("channel limit = %d, want 1", host.Config().ChannelLimit)
+	}
+}
+
+func TestNewHostExposesBoundLocalAddr(t *testing.T) {
+	host, err := NewHost(Config{PeerCount: 1, ChannelLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	addr, ok := host.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("local addr type = %T, want *net.UDPAddr", host.LocalAddr())
+	}
+	if addr.Port == 0 {
+		t.Fatal("expected non-zero bound port")
 	}
 }
 

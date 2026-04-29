@@ -159,6 +159,11 @@ type engineHost struct {
 	socket *udpSocket
 }
 
+type publicHost struct {
+	Host *goenet.Host
+	port int
+}
+
 func mustListenEngineHost(t *testing.T) *engineHost {
 	t.Helper()
 
@@ -172,8 +177,34 @@ func mustListenEngineHost(t *testing.T) *engineHost {
 	}
 }
 
+func mustListenPublicHost(t *testing.T) *publicHost {
+	t.Helper()
+
+	host, err := goenet.Listen("127.0.0.1:0", goenet.Config{
+		PeerCount:    8,
+		ChannelLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = host.Close()
+	})
+
+	addr, ok := host.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("public host local addr type = %T, want *net.UDPAddr", host.LocalAddr())
+	}
+
+	return &publicHost{Host: host, port: addr.Port}
+}
+
 func (h *engineHost) Port() int {
 	return int(h.socket.LocalAddr().Port())
+}
+
+func (h *publicHost) Port() int {
+	return h.port
 }
 
 func waitForEngineEventType(t *testing.T, host *engine.Host, want core.EventType) engine.Event {
@@ -192,6 +223,34 @@ func waitForEngineEventType(t *testing.T, host *engine.Host, want core.EventType
 
 	t.Fatalf("timed out waiting for event type %v", want)
 	return engine.Event{}
+}
+
+func waitForEngineConnectCount(t *testing.T, host *engine.Host, want int) []*peer.Peer {
+	t.Helper()
+
+	peers := make([]*peer.Peer, 0, want)
+	for len(peers) < want {
+		event := waitForEngineEventType(t, host, core.EventConnect)
+		peers = append(peers, event.Peer)
+	}
+
+	return peers
+}
+
+func mustServiceEngineWithoutDisconnect(t *testing.T, host *engine.Host, window time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(window)
+	for time.Now().Before(deadline) {
+		event, err := host.Service(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event.Type {
+		case core.EventDisconnect, core.EventDisconnectTimeout:
+			t.Fatalf("unexpected disconnect event during idle window: %v", event.Type)
+		}
+	}
 }
 
 func mustSendReliableEnginePacket(t *testing.T, host *engine.Host, peer *peer.Peer, payload string) {
@@ -350,6 +409,18 @@ func waitForPublicEventType(t *testing.T, host *goenet.Host, want goenet.EventTy
 	return goenet.Event{}
 }
 
+func waitForPublicConnectCount(t *testing.T, host *goenet.Host, want int) []*goenet.Peer {
+	t.Helper()
+
+	peers := make([]*goenet.Peer, 0, want)
+	for len(peers) < want {
+		event := waitForPublicEventType(t, host, goenet.EventConnect)
+		peers = append(peers, event.Peer)
+	}
+
+	return peers
+}
+
 func waitForPublicPayload(t *testing.T, host *goenet.Host, want string) goenet.Event {
 	t.Helper()
 
@@ -380,6 +451,21 @@ func mustSendPublicReliablePacket(t *testing.T, host *goenet.Host, peer *goenet.
 	t.Helper()
 
 	if err := peer.Send(0, &goenet.Packet{
+		Data:  []byte(payload),
+		Flags: goenet.PacketFlagReliable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustBroadcastReliablePacket(t *testing.T, host *goenet.Host, payload string) {
+	t.Helper()
+
+	if err := host.Broadcast(0, &goenet.Packet{
 		Data:  []byte(payload),
 		Flags: goenet.PacketFlagReliable,
 	}); err != nil {
