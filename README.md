@@ -156,7 +156,7 @@ The executable examples in [`examples/`](./examples) use the exported `goenet` p
 ## Current Limitations
 
 - Public address/introspection helpers are still minimal. The public API does not yet expose local bound address or remote peer address accessors.
-- `DisconnectNow` is available, but the public API still does not expose ENet's full disconnect method family beyond `Disconnect`, `DisconnectNow`, `DisconnectLater`, and `Reset`.
+- Outbound unsequenced send is not implemented yet. `PacketFlagUnsequenced` exists, but the current send path still rejects public unsequenced packets.
 
 ## Development
 
