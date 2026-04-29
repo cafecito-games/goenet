@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"net/netip"
@@ -44,7 +45,7 @@ func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("intercept calls = %d", calls)
 	}
-	if string(capture) != string(payload) {
+	if !bytes.Equal(capture, payload) {
 		t.Fatalf("intercept payload = %x, want %x", capture, payload)
 	}
 	if got := sock.WriteCount(); got != 0 {
@@ -230,7 +231,7 @@ func (c *testCompressor) Compress(buffers []core.Buffer, inLimit int, out []byte
 	return 1, nil
 }
 
-func (c *testCompressor) Decompress(in []byte, out []byte) (int, error) {
+func (c *testCompressor) Decompress(in, out []byte) (int, error) {
 	c.decompressCalls++
 	if len(in) != 1 || c.stored == nil {
 		return 0, nil

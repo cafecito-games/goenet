@@ -51,7 +51,7 @@ func (p *sendReliablePayload) MarshalBinary(dst []byte) []byte {
 	dst[start] = byte(protocol.CommandSendReliable | protocol.Command(protocol.CommandFlagAcknowledge))
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
-	binary.BigEndian.PutUint16(dst[start+4:start+6], uint16(len(p.data)))
+	binary.BigEndian.PutUint16(dst[start+4:start+6], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+6:], p.data)
 	return dst
 }
@@ -75,7 +75,7 @@ func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], p.unreliableSequenceNumber)
-	binary.BigEndian.PutUint16(dst[start+6:start+8], uint16(len(p.data)))
+	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+8:], p.data)
 	return dst
 }
@@ -86,11 +86,11 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 	}
 
 	command := &peer.OutgoingCommand{
-		FragmentLength: uint16(len(packet.Data)),
+		FragmentLength: checkedUint16FromInt(len(packet.Data)),
 		Packet:         packet,
 	}
 
-	if packet.Flags&core.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber >= 0xFFFF {
+	if packet.Flags&core.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber == math.MaxUint16 {
 		command.Command = peer.Command{
 			Header: peer.Header{
 				Command:   protocol.CommandSendReliable,
@@ -195,7 +195,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	}
 	if batchRequiresAck(selected) {
 		header.Flags = protocol.HeaderFlagSentTime
-		header.SentTime = uint16(h.serviceTime)
+		header.SentTime = lowUint16FromUint32(h.serviceTime)
 	}
 
 	body := make([]byte, 0)
@@ -299,12 +299,12 @@ func markCommandInFlight(p *peer.Peer, cmd *peer.OutgoingCommand, serviceTime ui
 	}
 }
 
-func (h *Host) selectOutgoingBatch(p *peer.Peer) ([]outgoingSelection, *outgoingSelection) {
+func (h *Host) selectOutgoingBatch(p *peer.Peer) (selected []outgoingSelection, blocked *outgoingSelection) {
 	ackFront := p.Acknowledgements.Front()
 	reliableFront := p.OutgoingSendReliableCommands.Front()
 	outgoingFront := p.OutgoingCommands.Front()
 
-	selected := make([]outgoingSelection, 0, protocol.MaximumPacketCommands)
+	selected = make([]outgoingSelection, 0, protocol.MaximumPacketCommands)
 	bodySize := 0
 	hasAck := false
 
@@ -395,7 +395,7 @@ func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
 			ReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
 		},
 		ReceivedReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
-		ReceivedSentTime:               uint16(ack.SentTime),
+		ReceivedSentTime:               lowUint16FromUint32(ack.SentTime),
 	}
 }
 
@@ -422,7 +422,7 @@ func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
 	}
 
 	overhead := headerOverhead(requiresSentTime, h.config.Checksum != nil) + commandSize
-	if p.MTU <= uint32(overhead) {
+	if p.MTU <= checkedUint32FromInt(overhead) {
 		return 0
 	}
 
@@ -474,7 +474,7 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 	command.SendAttempts = 0
 	command.SentTime = 0
 	command.RoundTripTimeout = 0
-	p.OutgoingDataTotal += uint32(commandWireSize(command))
+	p.OutgoingDataTotal += checkedUint32FromInt(commandWireSize(command))
 	h.totalQueued++
 	command.QueueTime = h.totalQueued
 	command.Command.Header.ReliableSequenceNumber = reliable

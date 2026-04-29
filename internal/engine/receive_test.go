@@ -791,34 +791,6 @@ func mustPeerInState(t *testing.T, host *Host, state core.PeerState) *ipeer.Peer
 	return nil
 }
 
-type interceptAdapter struct {
-	inner core.Interceptor
-}
-
-func (a interceptAdapter) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
-	return a.inner.Intercept(addr, payload)
-}
-
-type checksumAdapter struct {
-	inner core.Checksummer
-}
-
-func (a checksumAdapter) Checksum(buffers []core.Buffer) uint32 {
-	return a.inner.Checksum(buffers)
-}
-
-type compressorAdapter struct {
-	inner core.Compressor
-}
-
-func (a compressorAdapter) Compress(buffers []core.Buffer, inLimit int, out []byte) (int, error) {
-	return a.inner.Compress(buffers, inLimit, out)
-}
-
-func (a compressorAdapter) Decompress(in []byte, out []byte) (int, error) {
-	return a.inner.Decompress(in, out)
-}
-
 func mustSingleCommand(t *testing.T, payload []byte) (iprotocol.Header, iprotocol.PacketCommand) {
 	t.Helper()
 

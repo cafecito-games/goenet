@@ -125,8 +125,8 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 		}
 	}
 
-	header, err := protocol.ParseHeader(payload)
-	if err != nil {
+	header, ok := parseHeader(payload)
+	if !ok {
 		return nil
 	}
 
@@ -147,7 +147,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 		return nil
 	}
 	if currentPeer != nil {
-		currentPeer.IncomingDataTotal += uint32(len(payload))
+		currentPeer.IncomingDataTotal += checkedUint32FromInt(len(payload))
 	}
 
 	workingPayload := payload
@@ -160,8 +160,8 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 			return nil
 		}
 		decompressed := make([]byte, outLimit)
-		n, err := h.config.Compressor.Decompress(payload[offset:], decompressed)
-		if err != nil || n <= 0 || n > len(decompressed) {
+		n, ok := decompressPayload(h.config.Compressor, payload[offset:], decompressed)
+		if !ok {
 			return nil
 		}
 
@@ -182,8 +182,8 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr netip.AddrPort) error
 	}
 
 	for offset < len(workingPayload) {
-		command, _, used, err := protocol.ParseCommand(workingPayload[offset:])
-		if err != nil {
+		command, used, ok := parseCommand(workingPayload[offset:])
+		if !ok {
 			return nil
 		}
 		offset += used
@@ -257,11 +257,11 @@ func (h *Host) handleIncomingCommand(
 		if *currentPeer != nil {
 			return inboundReject
 		}
-		peer := h.handleConnect(addr, cmd)
-		if peer == nil {
+		connectedPeer := h.handleConnect(addr, cmd)
+		if connectedPeer == nil {
 			return inboundReject
 		}
-		*currentPeer = peer
+		*currentPeer = connectedPeer
 		return inboundAccept
 	case protocol.VerifyConnect:
 		if *currentPeer == nil {
@@ -425,8 +425,8 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 	}
 
 	h.removeSentReliableCommand(p, 1, 0xFF)
-	if command.ChannelCount < uint32(len(p.Channels)) {
-		p.Channels = p.Channels[:command.ChannelCount]
+	if int(command.ChannelCount) < len(p.Channels) {
+		p.Channels = p.Channels[:int(command.ChannelCount)]
 	}
 
 	p.OutgoingPeerID = command.OutgoingPeerID
@@ -605,7 +605,7 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 		return inboundIgnore
 	}
 
-	groupBase := uint16(unsequencedGroup-index) & 0xFFFF
+	groupBase := lowUint16FromUint32(unsequencedGroup - index)
 	if groupBase != p.IncomingUnsequencedGroup {
 		p.IncomingUnsequencedGroup = groupBase
 		for i := range p.UnsequencedWindow {
@@ -614,7 +614,7 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 	} else if p.UnsequencedWindow[index/32]&(uint32(1)<<(index%32)) != 0 {
 		return inboundIgnore
 	}
-	if !p.CanQueueWaitingData(uint32(len(command.Data)), h.config.MaximumWaitingData) {
+	if !p.CanQueueWaitingData(checkedUint32FromInt(len(command.Data)), h.config.MaximumWaitingData) {
 		return inboundReject
 	}
 
@@ -631,7 +631,7 @@ func (h *Host) handleSendUnsequenced(p *peer.Peer, command protocol.SendUnsequen
 			Flags: core.PacketFlagUnsequenced,
 		},
 	}
-	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
+	p.AddWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
 	p.QueueDispatchedCommand(cmd)
 	p.UnsequencedWindow[index/32] |= uint32(1) << (index % 32)
 	h.enqueuePeerDispatch(p)
@@ -658,7 +658,7 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) i
 		command.TotalLength < command.FragmentCount ||
 		command.FragmentOffset >= command.TotalLength ||
 		len(command.Data) == 0 ||
-		uint32(len(command.Data)) > command.TotalLength-command.FragmentOffset {
+		checkedUint32FromInt(len(command.Data)) > command.TotalLength-command.FragmentOffset {
 		return inboundReject
 	}
 
@@ -685,7 +685,7 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) i
 		start.SetFragmentCount(command.FragmentCount)
 		p.AddWaitingData(command.TotalLength)
 		channel.InsertIncomingReliableOrdered(start)
-	} else if start.FragmentCount != command.FragmentCount || uint32(len(start.Packet.Data)) != command.TotalLength {
+	} else if start.FragmentCount != command.FragmentCount || checkedUint32FromInt(len(start.Packet.Data)) != command.TotalLength {
 		return inboundReject
 	}
 
@@ -722,7 +722,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 		command.TotalLength < command.FragmentCount ||
 		command.FragmentOffset >= command.TotalLength ||
 		len(command.Data) == 0 ||
-		uint32(len(command.Data)) > command.TotalLength-command.FragmentOffset {
+		checkedUint32FromInt(len(command.Data)) > command.TotalLength-command.FragmentOffset {
 		return inboundReject
 	}
 
@@ -747,7 +747,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 		start.SetFragmentCount(command.FragmentCount)
 		p.AddWaitingData(command.TotalLength)
 		channel.InsertIncomingUnreliableOrdered(start)
-	} else if start.FragmentCount != command.FragmentCount || uint32(len(start.Packet.Data)) != command.TotalLength {
+	} else if start.FragmentCount != command.FragmentCount || checkedUint32FromInt(len(start.Packet.Data)) != command.TotalLength {
 		return inboundReject
 	}
 
@@ -802,11 +802,11 @@ func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingComm
 			break
 		}
 	}
-	if !p.CanQueueWaitingData(uint32(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
+	if !p.CanQueueWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
 		return inboundReject
 	}
 
-	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
+	p.AddWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
 	channel.InsertIncomingReliableOrdered(cmd)
 	h.dispatchReliableCommands(p, channel)
 	return inboundAccept
@@ -839,11 +839,11 @@ func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCo
 			break
 		}
 	}
-	if !p.CanQueueWaitingData(uint32(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
+	if !p.CanQueueWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
 		return inboundReject
 	}
 
-	p.AddWaitingData(uint32(len(cmd.Packet.Data)))
+	p.AddWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
 	channel.InsertIncomingUnreliableOrdered(cmd)
 	h.dispatchUnreliableCommands(p, channel)
 	return inboundAccept
@@ -892,7 +892,7 @@ func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
 		if shouldDropUnreliable(channel, cmd) {
 			channel.IncomingUnreliableCommands.Remove(front)
 			if cmd.Packet != nil {
-				p.ReleaseWaitingData(uint32(len(cmd.Packet.Data)))
+				p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
 			}
 			continue
 		}
@@ -943,7 +943,7 @@ func (h *Host) dispatchEvent() (Event, bool) {
 			if cmd == nil || cmd.Packet == nil {
 				continue
 			}
-			p.ReleaseWaitingData(uint32(len(cmd.Packet.Data)))
+			p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
 			if p.DispatchedCommands.Len() > 0 {
 				h.enqueuePeerDispatch(p)
 			}
@@ -965,6 +965,21 @@ func (h *Host) dispatchEvent() (Event, bool) {
 	}
 
 	return Event{}, false
+}
+
+func parseHeader(payload []byte) (protocol.Header, bool) {
+	header, err := protocol.ParseHeader(payload)
+	return header, err == nil
+}
+
+func parseCommand(payload []byte) (protocol.PacketCommand, int, bool) {
+	command, _, used, err := protocol.ParseCommand(payload)
+	return command, used, err == nil
+}
+
+func decompressPayload(compressor core.Compressor, in, out []byte) (int, bool) {
+	n, err := compressor.Decompress(in, out)
+	return n, err == nil
 }
 
 func (h *Host) enqueuePeerDispatch(p *peer.Peer) {
@@ -1101,7 +1116,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 			return
 		}
 	}
-	if header.ChannelID < uint8(len(p.Channels)) {
+	if int(header.ChannelID) < len(p.Channels) {
 		channel := &p.Channels[header.ChannelID]
 		reliableWindow := header.ReliableSequenceNumber / peerReliableWindowSize
 		currentWindow := channel.IncomingReliableSequenceNumber / peerReliableWindowSize
@@ -1125,7 +1140,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 			},
 		},
 	}
-	p.OutgoingDataTotal += uint32(len(marshalAcknowledgement(ack).MarshalBinary(nil)))
+	p.OutgoingDataTotal += checkedUint32FromInt(len(marshalAcknowledgement(ack).MarshalBinary(nil)))
 	p.Acknowledgements.PushBack(ack)
 }
 

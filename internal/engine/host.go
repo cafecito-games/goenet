@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -200,7 +202,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 	command.SendAttempts = 0
 	command.SentTime = 0
 	command.RoundTripTimeout = 0
-	p.OutgoingDataTotal += uint32(commandWireSize(command))
+	p.OutgoingDataTotal += checkedUint32FromInt(commandWireSize(command))
 	h.totalQueued++
 	command.QueueTime = h.totalQueued
 	command.Command.Header.ReliableSequenceNumber = command.ReliableSequenceNumber
@@ -306,12 +308,12 @@ func (h *Host) configurePeer(p *peer.Peer, index int, addr core.Address, state c
 		channels[i] = peer.NewChannel()
 	}
 
-	outgoingPeerID := uint16(index + 1)
+	outgoingPeerID := checkedUint16FromInt(index + 1)
 	if state == core.PeerStateConnecting {
 		outgoingPeerID = protocolMaximumPeerID
 	}
 
-	h.initializePeer(p, index, addr, state, outgoingPeerID, 0xFF, uint8((index%3)+1))
+	h.initializePeer(p, index, addr, state, outgoingPeerID, 0xFF, peerSessionIDForIndex(index))
 	p.Channels = channels
 	h.runtime[p] = defaultPeerRuntime()
 	return p
@@ -328,7 +330,7 @@ func (h *Host) initializePeer(
 ) {
 	*p = peer.Peer{
 		OutgoingPeerID:               outgoingPeerID,
-		IncomingPeerID:               uint16(index),
+		IncomingPeerID:               checkedUint16FromInt(index),
 		IncomingSessionID:            incomingSessionID,
 		OutgoingSessionID:            outgoingSessionID,
 		MTU:                          h.config.MTU,
@@ -359,6 +361,32 @@ func (h *Host) nextPeerConnectID() uint32 {
 	}
 
 	return h.nextConnectID
+}
+
+func checkedUint32FromInt(value int) uint32 {
+	if value < 0 || uint64(value) > math.MaxUint32 {
+		panic(fmt.Sprintf("engine: int value %d overflows uint32", value))
+	}
+
+	return uint32(value)
+}
+
+func checkedUint16FromInt(value int) uint16 {
+	if value < 0 || value > math.MaxUint16 {
+		panic(fmt.Sprintf("engine: int value %d overflows uint16", value))
+	}
+
+	return uint16(value)
+}
+
+func peerSessionIDForIndex(index int) uint8 {
+	return [...]uint8{1, 2, 3}[index%3]
+}
+
+func lowUint16FromUint32(value uint32) uint16 {
+	var wire [4]byte
+	binary.BigEndian.PutUint32(wire[:], value)
+	return binary.BigEndian.Uint16(wire[2:])
 }
 
 func (h *Host) outboundWindowSize() uint32 {
