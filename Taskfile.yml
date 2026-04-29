@@ -22,8 +22,8 @@ tasks:
   interop:test:
     desc: Build the interop C harness incrementally and run interop tests.
     cmds:
-      - ./interop/scripts/build_harness.sh
-      - go test ./interop -count=1
+      - ./internal/interop/scripts/build_harness.sh
+      - go test ./internal/interop -count=1
 
   test:cover:
     desc: Run tests with coverage; writes to COVERAGE_FILE or a temp profile.

@@ -10,12 +10,18 @@
 
 ## Compatibility Target
 
-`goenet` is developed against an ENet fork snapshot vendored for interop checks in [`interop/vendor`](./interop/vendor). Interoperability checks in [`interop/`](./interop) build and exercise that source directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness uses that vendored source by default, or `ENET_SOURCE_DIR` when set.
+`goenet` is developed against an ENet fork snapshot vendored for interop checks in [`internal/interop/vendor`](./internal/interop/vendor). Interoperability checks in [`internal/interop/`](./internal/interop) build and exercise that source directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness uses that vendored source by default, or `ENET_SOURCE_DIR` when set.
 
 ## Installation
 
 ```sh
 go get github.com/cafecito-games/goenet
+```
+
+Import the public API from:
+
+```go
+import goenet "github.com/cafecito-games/goenet/pkg"
 ```
 
 ## Public API
@@ -178,5 +184,5 @@ Common tasks:
 Cross-language interoperability against the local ENet fork:
 
 ```sh
-go test ./interop -count=1
+go test ./internal/interop -count=1
 ```
