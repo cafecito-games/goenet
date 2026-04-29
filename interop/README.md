@@ -12,6 +12,7 @@ cp interop/.env.example interop/.env
 ```
 
 Then set `ENET_SOURCE_DIR` in `interop/.env` to your preferred ENet source tree, or export it from your shell before running commands. If you need a different env file location, set `GOENET_INTEROP_ENVFILE`.
+Then set `ENET_SOURCE_DIR` in `interop/.env` to your preferred ENet source tree, or export it from your shell before running commands. If you need a different env file location, set `GOENET_INTEROP_ENVFILE`.
 
 The expected ENet layout is:
 
