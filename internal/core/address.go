@@ -3,6 +3,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 )
 
@@ -34,4 +35,22 @@ func (a Address) AddrPort() netip.AddrPort {
 // ScopeID returns the IPv6 scope identifier associated with the address.
 func (a Address) ScopeID() uint32 {
 	return a.scopeID
+}
+
+// Equal reports whether two addresses refer to the same endpoint, including IPv6 scope.
+func (a Address) Equal(other Address) bool {
+	return a.addrPort == other.addrPort && a.scopeID == other.scopeID
+}
+
+// String renders the address as host:port with an optional %scope suffix for IPv6.
+func (a Address) String() string {
+	if a.scopeID == 0 {
+		return a.addrPort.String()
+	}
+	return fmt.Sprintf("%s%%%d", a.addrPort.String(), a.scopeID)
+}
+
+// IsValid reports whether the address has a usable underlying netip.AddrPort.
+func (a Address) IsValid() bool {
+	return a.addrPort.IsValid()
 }

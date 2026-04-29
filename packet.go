@@ -23,8 +23,13 @@ func toCorePacket(packet *Packet) *core.Packet {
 		return nil
 	}
 
+	// Copy Data so the engine, which retains the bytes for retransmits, never
+	// observes mid-flight mutations from a caller that reuses its send buffer.
+	// This matches Go's normal "buffer reuse is safe after the call returns"
+	// expectation that the public API would otherwise violate silently.
+	data := append([]byte(nil), packet.Data...)
 	return &core.Packet{
-		Data:  packet.Data,
+		Data:  data,
 		Flags: core.PacketFlag(packet.Flags),
 	}
 }

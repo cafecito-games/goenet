@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -79,11 +80,12 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	}
 
 	host := &Host{
-		config:      cfg,
-		socket:      sock,
-		serviceTime: serviceTime,
-		dispatchSet: make(map[*peer.Peer]struct{}),
-		runtime:     make(map[*peer.Peer]*peerRuntime),
+		config:        cfg,
+		socket:        sock,
+		serviceTime:   serviceTime,
+		dispatchSet:   make(map[*peer.Peer]struct{}),
+		runtime:       make(map[*peer.Peer]*peerRuntime),
+		nextConnectID: randomConnectIDSeed(),
 	}
 	for index := 0; index < cfg.PeerCount; index++ {
 		host.peers = append(host.peers, host.newPeerSlot(index))
@@ -92,7 +94,30 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	return host
 }
 
+// Peers returns the internal peer slot slice in stable index order.
+// The returned slice aliases internal state and must be treated as read-only.
+func (h *Host) Peers() []*peer.Peer {
+	return h.peers
+}
+
+// SetServiceTime overrides the engine's millisecond clock to t. The public host
+// calls this at the start of every Service/Flush from a wall clock so RTT,
+// retransmit, and throttle math observe real elapsed time. Tests use it to drive
+// a virtual clock deterministically.
+func (h *Host) SetServiceTime(t uint32) {
+	h.serviceTime = t
+}
+
+// ServiceTime returns the engine's current millisecond clock (primarily for tests).
+func (h *Host) ServiceTime() uint32 {
+	return h.serviceTime
+}
+
 // AddPeer reserves or extends a peer slot with the provided address and state.
+//
+// AddPeer is exposed only as a test-construction helper so harnesses can bypass
+// the connect handshake. Production code paths must use Connect or accept inbound
+// connections; do not call AddPeer from non-test callers.
 func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 	for index, candidate := range h.peers {
 		if candidate != nil && candidate.State == core.PeerStateDisconnected {
@@ -129,7 +154,8 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 }
 
 // Disconnect follows ENet's graceful or handshake-state disconnect path for p.
-func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
+// ctx scopes any synchronous flush triggered by an unsequenced disconnect.
+func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -155,7 +181,7 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 	if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
 		return err
 	}
-	if err := h.Flush(context.Background()); err != nil {
+	if err := h.Flush(ctx); err != nil {
 		return err
 	}
 	h.resetPeer(p)
@@ -163,7 +189,8 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 }
 
 // DisconnectNow force-flushes an unsequenced disconnect and resets the peer locally.
-func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
+// ctx scopes the synchronous flush of the disconnect command.
+func (h *Host) DisconnectNow(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -175,7 +202,7 @@ func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
 		if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
 			return err
 		}
-		if err := h.Flush(context.Background()); err != nil {
+		if err := h.Flush(ctx); err != nil {
 			return err
 		}
 	}
@@ -217,7 +244,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 }
 
 // DisconnectLater defers disconnect until the peer's outbound reliable work drains.
-func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
+func (h *Host) DisconnectLater(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
 		return fmt.Errorf("engine: nil peer")
 	}
@@ -228,7 +255,7 @@ func (h *Host) DisconnectLater(p *peer.Peer, data uint32) error {
 		return nil
 	}
 
-	return h.Disconnect(p, data)
+	return h.Disconnect(ctx, p, data)
 }
 
 // Reset immediately drops all local state for p without a wire notification.
@@ -263,7 +290,7 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 	}
 
 	p = h.configurePeer(p, index, addr, core.PeerStateConnecting)
-	p.Channels = make([]peer.Channel, requestedChannels)
+	p.Channels = make([]*peer.Channel, requestedChannels)
 	for i := range p.Channels {
 		p.Channels[i] = peer.NewChannel()
 	}
@@ -311,7 +338,7 @@ func (h *Host) newPeerSlot(index int) *peer.Peer {
 }
 
 func (h *Host) configurePeer(p *peer.Peer, index int, addr core.Address, state core.PeerState) *peer.Peer {
-	channels := make([]peer.Channel, h.config.ChannelLimit)
+	channels := make([]*peer.Channel, h.config.ChannelLimit)
 	for i := range channels {
 		channels[i] = peer.NewChannel()
 	}
@@ -371,6 +398,18 @@ func (h *Host) nextPeerConnectID() uint32 {
 	return h.nextConnectID
 }
 
+// randomConnectIDSeed seeds the per-host connect ID counter from crypto/rand so
+// peers can disambiguate stale datagrams across host restarts. Failure to read
+// from the OS entropy source is non-fatal — the counter still produces unique
+// monotonic IDs within a single host lifetime.
+func randomConnectIDSeed() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
+	}
+	return binary.BigEndian.Uint32(b[:])
+}
+
 func checkedUint32FromInt(value int) uint32 {
 	if value < 0 || uint64(value) > math.MaxUint32 {
 		panic(fmt.Sprintf("engine: int value %d overflows uint32", value))
@@ -404,6 +443,33 @@ func (h *Host) outboundWindowSize() uint32 {
 
 	windowSize := (h.outgoingBandwidth / peerWindowSizeScale) * protocol.MinimumWindowSize
 	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+}
+
+// negotiatedPeerWindowSize replicates the C ENet `peer->windowSize` derivation in
+// enet_protocol_handle_connect (enet.h:1934-1945): MAX when one side advertises
+// zero, MIN when both have non-zero caps, clamped to the protocol window range.
+func negotiatedPeerWindowSize(hostOutgoing, peerIncoming uint32) uint32 {
+	var windowSize uint32
+	switch {
+	case hostOutgoing == 0 && peerIncoming == 0:
+		windowSize = protocol.MaximumWindowSize
+	case hostOutgoing == 0 || peerIncoming == 0:
+		windowSize = (maxUint32(hostOutgoing, peerIncoming) / peerWindowSizeScale) * protocol.MinimumWindowSize
+	default:
+		windowSize = (minUint32(hostOutgoing, peerIncoming) / peerWindowSizeScale) * protocol.MinimumWindowSize
+	}
+	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+}
+
+// verifyConnectWindowSize replicates the C ENet `windowSize` derivation in
+// enet_protocol_handle_connect (enet.h:1948-1962) used to populate the
+// VerifyConnect command's window size before MIN-clamping against the peer's
+// requested window.
+func verifyConnectWindowSize(hostIncoming uint32) uint32 {
+	if hostIncoming == 0 {
+		return protocol.MaximumWindowSize
+	}
+	return (hostIncoming / peerWindowSizeScale) * protocol.MinimumWindowSize
 }
 
 func (h *Host) hasOutgoingCommands(p *peer.Peer) bool {
@@ -499,20 +565,20 @@ func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
 	return event, true
 }
 
-func (h *Host) bandwidthThrottle() {
+func (h *Host) bandwidthThrottle() error {
 	elapsedTime := h.serviceTime - h.bandwidthThrottleEpoch
 	if elapsedTime < defaultBandwidthThrottleInterval {
-		return
+		return nil
 	}
 	if h.outgoingBandwidth == 0 && h.incomingBandwidth == 0 {
-		return
+		return nil
 	}
 
 	h.bandwidthThrottleEpoch = h.serviceTime
 
 	peersRemaining := h.connectedPeerCount()
 	if peersRemaining == 0 {
-		return
+		return nil
 	}
 
 	dataTotal := ^uint32(0)
@@ -591,7 +657,7 @@ func (h *Host) bandwidthThrottle() {
 	}
 
 	if !h.recalculateBandwidthLimits {
-		return
+		return nil
 	}
 
 	h.recalculateBandwidthLimits = false
@@ -631,7 +697,7 @@ func (h *Host) bandwidthThrottle() {
 			incomingLimit = p.OutgoingBandwidth
 		}
 
-		_ = h.queueOutgoingControlCommand(p, peer.Command{
+		if err := h.queueOutgoingControlCommand(p, peer.Command{
 			Header: peer.Header{
 				Command:   protocol.CommandBandwidthLimit,
 				ChannelID: 0xFF,
@@ -641,8 +707,12 @@ func (h *Host) bandwidthThrottle() {
 				IncomingBandwidth: incomingLimit,
 				OutgoingBandwidth: h.outgoingBandwidth,
 			},
-		})
+		}); err != nil {
+			return fmt.Errorf("engine: bandwidth limit broadcast: %w", err)
+		}
 	}
+
+	return nil
 }
 
 func (h *Host) connectedPeerCount() uint32 {

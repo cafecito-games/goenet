@@ -7,12 +7,8 @@ const (
 	defaultMTU                uint32 = 1392
 	defaultMaximumPacketSize  uint32 = 32 * 1024 * 1024
 	defaultMaximumWaitingData uint32 = 32 * 1024 * 1024
+	defaultPeerCount                 = 1
 )
-
-// Buffer is one byte slice passed to checksum and compression hooks.
-type Buffer struct {
-	Data []byte
-}
 
 // PacketFlag controls how a packet is sent or interpreted.
 type PacketFlag uint32
@@ -72,14 +68,16 @@ const (
 	PeerStateZombie
 )
 
-// Checksummer computes a checksum across the provided buffers.
+// Checksummer computes a checksum across the provided buffer slices, treated as a
+// single concatenated byte sequence.
 type Checksummer interface {
-	Checksum(buffers []Buffer) uint32
+	Checksum(buffers [][]byte) uint32
 }
 
 // Compressor compresses and decompresses ENet payload bytes around the protocol header.
+// buffers passed to Compress are concatenated input.
 type Compressor interface {
-	Compress(buffers []Buffer, inLimit int, out []byte) (int, error)
+	Compress(buffers [][]byte, inLimit int, out []byte) (int, error)
 	Decompress(in []byte, out []byte) (int, error)
 }
 
@@ -124,9 +122,11 @@ type Config struct {
 	Intercept          Interceptor
 }
 
-// DefaultConfig returns ENet-compatible host defaults.
+// DefaultConfig returns ENet-compatible host defaults suitable for a single-peer client.
+// Servers should override PeerCount to reflect the maximum number of accepted connections.
 func DefaultConfig() Config {
 	return Config{
+		PeerCount:          defaultPeerCount,
 		MTU:                defaultMTU,
 		MaximumPacketSize:  defaultMaximumPacketSize,
 		MaximumWaitingData: defaultMaximumWaitingData,

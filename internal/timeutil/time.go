@@ -17,8 +17,3 @@ func Difference(a, b uint32) uint32 {
 func Less(a, b uint32) bool {
 	return a-b >= TimeOverflow
 }
-
-// GreaterEqual matches ENet's overflow-safe time ordering.
-func GreaterEqual(a, b uint32) bool {
-	return !Less(a, b)
-}

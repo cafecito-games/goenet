@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/cafecito-games/goenet/internal/core"
@@ -43,6 +44,12 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, core.Address{}, ctxErr
 			}
+			continue
+		}
+		// On Linux and Windows a prior outbound datagram can surface as an
+		// ICMP "destination unreachable" on the next read. C ENet silently
+		// drops the error; matching that here keeps the read loop alive.
+		if errors.Is(err, syscall.ECONNREFUSED) {
 			continue
 		}
 		return 0, core.Address{}, err

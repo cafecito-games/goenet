@@ -247,7 +247,8 @@ func (h *Host) Flush(ctx context.Context) error {
 
 			h.commitPreparedDatagram(p, datagram)
 			if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
-				if err := h.Disconnect(p, h.runtime[p].eventData); err != nil {
+				// Same as the receive-path call: always hits the no-flush branch.
+				if err := h.Disconnect(ctx, p, h.runtime[p].eventData); err != nil {
 					return err
 				}
 			}
@@ -306,7 +307,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 	if h.config.Compressor != nil {
 		compressed := make([]byte, len(body))
-		n, err := h.config.Compressor.Compress([]core.Buffer{{Data: body}}, len(body), compressed)
+		n, err := h.config.Compressor.Compress([][]byte{body}, len(body), compressed)
 		if err != nil {
 			return preparedDatagram{}, false, err
 		}
@@ -322,11 +323,7 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	if h.config.Checksum != nil {
 		checksumBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(checksumBytes, outgoingChecksumSeed(p))
-		sum := h.config.Checksum.Checksum([]core.Buffer{
-			{Data: headerBytes},
-			{Data: checksumBytes},
-			{Data: body},
-		})
+		sum := h.config.Checksum.Checksum([][]byte{headerBytes, checksumBytes, body})
 		binary.LittleEndian.PutUint32(checksumBytes, sum)
 		payload = append(payload, checksumBytes...)
 	}
@@ -578,14 +575,14 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 		p.OutgoingReliableSequenceNumber++
 		reliable = p.OutgoingReliableSequenceNumber
 	case commandRequiresAck(command):
-		channel := &p.Channels[channelID]
+		channel := p.Channels[channelID]
 		channel.OutgoingReliableSequenceNumber++
 		channel.OutgoingUnreliableSequenceNumber = 0
 		reliable = channel.OutgoingReliableSequenceNumber
 	case command.Command.Header.Flags&protocol.CommandFlagUnsequenced != 0:
 		p.OutgoingUnsequencedGroup++
 	default:
-		channel := &p.Channels[channelID]
+		channel := p.Channels[channelID]
 		channel.OutgoingUnreliableSequenceNumber++
 		reliable = channel.OutgoingReliableSequenceNumber
 		unreliable = channel.OutgoingUnreliableSequenceNumber

@@ -365,6 +365,11 @@ func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 	}
 }
 
+// payloadSize16 narrows a payload byte count to the 16-bit on-wire length field.
+// Callers in the engine fragment outbound packets to <MTU before reaching marshal,
+// so n cannot legitimately exceed math.MaxUint16; an overflow here indicates a
+// programmer error in the caller (e.g. skipping fragmentation), not a wire-format
+// failure, hence the panic rather than a returned error.
 func payloadSize16(n int) uint16 {
 	if n < 0 || n > math.MaxUint16 {
 		panic(fmt.Sprintf("protocol payload too large for 16-bit length: %d", n))
@@ -509,11 +514,22 @@ func parseSendFragment(header CommandHeader, src []byte) (SendFragment, int, err
 		return SendFragment{}, 0, fmt.Errorf("send fragment payload too short: got %d bytes", len(src))
 	}
 
+	fragmentCount := binary.BigEndian.Uint32(src[8:12])
+	fragmentNumber := binary.BigEndian.Uint32(src[12:16])
+	// Reject peer-controlled values that would otherwise drive a huge bitmap
+	// allocation downstream (matches ENET_PROTOCOL_MAXIMUM_FRAGMENT_COUNT).
+	if fragmentCount == 0 || fragmentCount > MaximumFragmentCount {
+		return SendFragment{}, 0, fmt.Errorf("send fragment count %d out of range", fragmentCount)
+	}
+	if fragmentNumber >= fragmentCount {
+		return SendFragment{}, 0, fmt.Errorf("send fragment number %d >= count %d", fragmentNumber, fragmentCount)
+	}
+
 	return SendFragment{
 		Header:              header,
 		StartSequenceNumber: binary.BigEndian.Uint16(src[4:6]),
-		FragmentCount:       binary.BigEndian.Uint32(src[8:12]),
-		FragmentNumber:      binary.BigEndian.Uint32(src[12:16]),
+		FragmentCount:       fragmentCount,
+		FragmentNumber:      fragmentNumber,
 		TotalLength:         binary.BigEndian.Uint32(src[16:20]),
 		FragmentOffset:      binary.BigEndian.Uint32(src[20:24]),
 		Data:                append([]byte(nil), src[24:24+dataLength]...),
