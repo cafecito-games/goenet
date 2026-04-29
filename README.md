@@ -4,15 +4,13 @@
 
 ## Goals
 
-This repository is the baseline for a Go-native ENet-style transport layer with:
-
-- a small public API for embedding in dedicated servers and game backends
-- protocol compatibility with ENet peers over UDP
-- no CGO or external native ENet dependency
+- Wire/protocol compatibility with ENet peers over UDP
+- A Go-native public API for client/server hosts and peers
+- No CGO or native ENet dependency at runtime
 
 ## Compatibility Target
 
-`goenet` targets wire-level interoperability with the ENet fork checked out locally at `/Users/christian/CafecitoGames/enet`. That fork's single-header `include/enet.h` is the development source of truth used by this repository for interoperability verification, including the connect and packet-exchange harness in [`interop/`](./interop). The protocol constants and layout in `goenet` are still aligned with the ENet `2.6.5` era wire format exercised by that fork.
+`goenet` is developed against the local ENet fork at `/Users/christian/CafecitoGames/enet`. Interoperability checks in [`interop/`](./interop) build and exercise that fork directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it.
 
 ## Installation
 
@@ -20,34 +18,142 @@ This repository is the baseline for a Go-native ENet-style transport layer with:
 go get github.com/cafecito-games/goenet
 ```
 
-The module currently exposes the data types and compatibility constants needed by the engine and tests. Public host construction, listen/connect, and service-loop APIs are not exported yet.
+## Public API
 
-## Current Public Surface
+Host construction:
 
-Server-side configuration currently looks like this:
+- `Listen(addr string, cfg Config) (*Host, error)`
+- `NewHost(cfg Config) (*Host, error)`
+- `(*Host).Config() Config`
+- `(*Host).Close() error`
+
+Host operations:
+
+- `(*Host).Connect(addr string, channelCount uint8, data uint32) (*Peer, error)`
+- `(*Host).Service(ctx context.Context, timeout time.Duration) (Event, error)`
+- `(*Host).Flush(ctx context.Context) error`
+- `(*Host).Broadcast(channelID uint8, packet *Packet) error`
+
+Peer operations:
+
+- `Peer.State() PeerState`
+- `Peer.Send(channelID uint8, packet *Packet) error`
+- `Peer.Disconnect(data uint32) error`
+- `Peer.DisconnectLater(data uint32) error`
+- `Peer.Reset()`
+
+Core value types:
+
+- `Config`
+- `Address`
+- `Packet`
+- `Event`
+- `EventType`
+- `PacketFlag`
+- `PeerState`
+
+## Quick Start
+
+Server:
 
 ```go
 cfg := goenet.DefaultConfig()
 cfg.PeerCount = 64
 cfg.ChannelLimit = 2
+
+host, err := goenet.Listen("0.0.0.0:9000", cfg)
+if err != nil {
+	return err
+}
+defer host.Close()
+
+for {
+	event, err := host.Service(ctx, 50*time.Millisecond)
+	if err != nil {
+		return err
+	}
+
+	switch event.Type {
+	case goenet.EventConnect:
+		log.Printf("peer connected: state=%v", event.Peer.State())
+	case goenet.EventReceive:
+		log.Printf("channel=%d bytes=%d", event.ChannelID, len(event.Packet.Data))
+	case goenet.EventDisconnect, goenet.EventDisconnectTimeout:
+		log.Printf("peer disconnected: data=%d", event.Data)
+	case goenet.EventNone:
+	}
+}
 ```
 
-Packets and event values already have stable public types:
+Client:
 
 ```go
-packet := goenet.Packet{
-	Data:  []byte("hello"),
-	Flags: goenet.PacketFlagReliable,
+cfg := goenet.DefaultConfig()
+cfg.ChannelLimit = 1
+
+host, err := goenet.NewHost(cfg)
+if err != nil {
+	return err
+}
+defer host.Close()
+
+peer, err := host.Connect("127.0.0.1:9000", 1, 0xCAFE)
+if err != nil {
+	return err
+}
+if err := host.Flush(ctx); err != nil {
+	return err
 }
 
-event := goenet.Event{
-	Type:      goenet.EventReceive,
-	ChannelID: 0,
-	Packet:    &packet,
+for {
+	event, err := host.Service(ctx, 50*time.Millisecond)
+	if err != nil {
+		return err
+	}
+
+	switch event.Type {
+	case goenet.EventConnect:
+		if event.Peer != peer {
+			return fmt.Errorf("unexpected peer handle")
+		}
+
+		packet := &goenet.Packet{
+			Data:  []byte("hello"),
+			Flags: goenet.PacketFlagReliable,
+		}
+		if err := peer.Send(0, packet); err != nil {
+			return err
+		}
+		if err := host.Flush(ctx); err != nil {
+			return err
+		}
+	case goenet.EventDisconnect, goenet.EventDisconnectTimeout:
+		return nil
+	case goenet.EventNone:
+	}
 }
 ```
 
-The example coverage in [`examples/`](./examples) is intentionally limited to this real package surface. Interoperability tests that exercise live connect and packet exchange are in [`interop/`](./interop) and currently drive `internal/engine` directly until the public host API exists.
+## Event And Packet Semantics
+
+- `Service` advances the host state machine and returns the next public `Event`.
+- `EventNone` means the host serviced work or timed out without a user-visible event.
+- `PacketFlagReliable` maps to ENet reliable delivery.
+- `PacketFlagUnsequenced` maps to ENet unsequenced delivery.
+- `Connect`, `Send`, `Broadcast`, `Disconnect`, and `DisconnectLater` queue work. Call `Flush` to push queued outbound traffic immediately.
+
+## Examples
+
+The executable examples in [`examples/`](./examples) use the exported `goenet` package only. They cover:
+
+- host construction with `Listen`
+- client-side `Connect` and explicit `Flush`
+- external-package smoke coverage for `Listen`, `NewHost`, `Connect`, `Flush`, and `Close`
+
+## Current Limitations
+
+- Public address/introspection helpers are still minimal. The public API does not yet expose local bound address or remote peer address accessors.
+- Connected-flow disconnects are usable, but handshake-state disconnect behavior is not yet a byte-for-byte match for ENet's special unsequenced fast path.
 
 ## Development
 
@@ -57,7 +163,7 @@ This repository uses [Task](https://taskfile.dev) for local automation.
 task ci
 ```
 
-Available baseline tasks include:
+Common tasks:
 
 - `task fmt`
 - `task lint`
@@ -65,7 +171,7 @@ Available baseline tasks include:
 - `task test:cover`
 - `task build`
 
-For cross-language interoperability checks against the local ENet fork:
+Cross-language interoperability against the local ENet fork:
 
 ```sh
 go test ./interop -count=1

@@ -1,28 +1,28 @@
 package examples_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/cafecito-games/goenet"
 )
 
-func Example_basicClientPacket() {
-	packet := goenet.Packet{
-		Data:  []byte("hello"),
-		Flags: goenet.PacketFlagReliable,
+func ExampleNewHost_connect() {
+	host, err := goenet.NewHost(goenet.Config{PeerCount: 1, ChannelLimit: 1})
+	if err != nil {
+		panic(err)
+	}
+	defer host.Close()
+
+	peer, err := host.Connect("127.0.0.1:9000", 1, 0xCAFE)
+	if err != nil {
+		panic(err)
+	}
+	if err := host.Flush(context.Background()); err != nil {
+		panic(err)
 	}
 
-	event := goenet.Event{
-		Type:      goenet.EventReceive,
-		ChannelID: 0,
-		Packet:    &packet,
-	}
-
-	fmt.Printf("event=%d reliable=%t bytes=%d\n",
-		event.Type,
-		packet.Flags&goenet.PacketFlagReliable != 0,
-		len(event.Packet.Data),
-	)
+	fmt.Printf("state=%d\n", peer.State())
 	// Output:
-	// event=3 reliable=true bytes=5
+	// state=1
 }
