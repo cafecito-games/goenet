@@ -161,7 +161,7 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 	return h.setupAndQueueOutgoingCommand(p, command)
 }
 
-func shouldFragmentReliablePacket(p *peer.Peer, packet *core.Packet, maxPacketDataLength int) bool {
+func shouldFragmentReliablePacket(_ *peer.Peer, packet *core.Packet, maxPacketDataLength int) bool {
 	return packet.Flags&core.PacketFlagReliable != 0 && len(packet.Data) > maxPacketDataLength
 }
 
@@ -178,8 +178,8 @@ func (h *Host) queueOutgoingReliableFragments(p *peer.Peer, channelID uint8, pac
 		}
 
 		command := &peer.OutgoingCommand{
-			FragmentOffset: uint32(offset),
-			FragmentLength: uint16(end - offset),
+			FragmentOffset: checkedUint32FromInt(offset),
+			FragmentLength: checkedUint16FromInt(end - offset),
 			Packet:         packet,
 			Command: peer.Command{
 				Header: peer.Header{
@@ -189,10 +189,10 @@ func (h *Host) queueOutgoingReliableFragments(p *peer.Peer, channelID uint8, pac
 				},
 				Payload: &protocol.SendFragment{
 					StartSequenceNumber: startSequenceNumber,
-					FragmentCount:       uint32(fragmentCount),
-					FragmentNumber:      uint32(fragmentNumber),
-					TotalLength:         uint32(len(packet.Data)),
-					FragmentOffset:      uint32(offset),
+					FragmentCount:       checkedUint32FromInt(fragmentCount),
+					FragmentNumber:      checkedUint32FromInt(fragmentNumber),
+					TotalLength:         checkedUint32FromInt(len(packet.Data)),
+					FragmentOffset:      checkedUint32FromInt(offset),
 					Data:                append([]byte(nil), packet.Data[offset:end]...),
 				},
 			},
@@ -545,7 +545,7 @@ func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
 
 func (h *Host) maxReliableFragmentDataLength(p *peer.Peer) int {
 	overhead := headerOverhead(true, h.config.Checksum != nil) + sendFragmentCommandSize
-	if p.MTU <= uint32(overhead) {
+	if p.MTU <= checkedUint32FromInt(overhead) {
 		return 0
 	}
 

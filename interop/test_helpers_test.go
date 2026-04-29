@@ -254,16 +254,16 @@ func mustServiceEngineWithoutDisconnect(t *testing.T, host *engine.Host, window 
 	}
 }
 
-func mustSendReliableEnginePacket(t *testing.T, host *engine.Host, peer *peer.Peer, payload string) {
+func mustSendReliableEnginePacket(t *testing.T, host *engine.Host, remotePeer *peer.Peer, payload string) {
 	t.Helper()
 
-	mustSendEnginePacketWithFlags(t, host, peer, payload, core.PacketFlagReliable)
+	mustSendEnginePacketWithFlags(t, host, remotePeer, payload, core.PacketFlagReliable)
 }
 
-func mustSendEnginePacketWithFlags(t *testing.T, host *engine.Host, peer *peer.Peer, payload string, flags core.PacketFlag) {
+func mustSendEnginePacketWithFlags(t *testing.T, host *engine.Host, remotePeer *peer.Peer, payload string, flags core.PacketFlag) {
 	t.Helper()
 
-	if err := host.Send(peer, 0, &core.Packet{
+	if err := host.Send(remotePeer, 0, &core.Packet{
 		Data:  []byte(payload),
 		Flags: flags,
 	}); err != nil {
@@ -313,7 +313,7 @@ func (b *scenarioReadyBuffer) String() string {
 	return b.output.String()
 }
 
-func startReadyScenarioOnEphemeralPort(t *testing.T, name string, args ...string) (*scenarioProcess, int) {
+func startReadyScenarioOnEphemeralPort(t *testing.T, name string, args ...string) (process *scenarioProcess, port int) {
 	t.Helper()
 
 	args = append([]string{"--port", "0"}, args...)
@@ -376,7 +376,7 @@ func mustNewPublicHost(t *testing.T) *goenet.Host {
 func mustConnectPublicHost(t *testing.T, host *goenet.Host, port int) *goenet.Peer {
 	t.Helper()
 
-	peer, err := host.Connect(fmt.Sprintf("127.0.0.1:%d", port), 1, 0)
+	connectedPeer, err := host.Connect(fmt.Sprintf("127.0.0.1:%d", port), 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func mustConnectPublicHost(t *testing.T, host *goenet.Host, port int) *goenet.Pe
 		t.Fatal(err)
 	}
 
-	return peer
+	return connectedPeer
 }
 
 func waitForPublicEventType(t *testing.T, host *goenet.Host, want goenet.EventType) goenet.Event {
@@ -448,10 +448,10 @@ func waitForPublicPayload(t *testing.T, host *goenet.Host, want string) goenet.E
 	return goenet.Event{}
 }
 
-func mustSendPublicReliablePacket(t *testing.T, host *goenet.Host, peer *goenet.Peer, payload string) {
+func mustSendPublicReliablePacket(t *testing.T, host *goenet.Host, remotePeer *goenet.Peer, payload string) {
 	t.Helper()
 
-	if err := peer.Send(0, &goenet.Packet{
+	if err := remotePeer.Send(0, &goenet.Packet{
 		Data:  []byte(payload),
 		Flags: goenet.PacketFlagReliable,
 	}); err != nil {

@@ -219,13 +219,13 @@ func mustLoadInteropConfigForTest(t *testing.T) interopConfig {
 	return cfg
 }
 
-func runBuildHarness(t *testing.T, cfg interopConfig, scenario string) (string, string) {
+func runBuildHarness(t *testing.T, cfg interopConfig, scenario string) (binaryPath, buildOutput string) {
 	t.Helper()
 
 	return runBuildHarnessWithENETSourceDir(t, cfg.ENETSourceDir, scenario)
 }
 
-func runBuildHarnessWithENETSourceDir(t *testing.T, enetSourceDir, scenario string) (string, string) {
+func runBuildHarnessWithENETSourceDir(t *testing.T, enetSourceDir, scenario string) (binaryPath, buildOutput string) {
 	t.Helper()
 
 	cmd := exec.Command(filepath.Join(interopDirFromRuntime(), "scripts", "build_harness.sh"), scenario)
