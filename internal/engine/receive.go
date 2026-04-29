@@ -1051,12 +1051,14 @@ func (h *Host) clearPeerQueues(p *peer.Peer) {
 	roundTripTimeVariance := p.RoundTripTimeVariance
 	reliableDataInTransit := p.ReliableDataInTransit
 	outgoingReliableSequenceNumber := p.OutgoingReliableSequenceNumber
+	outgoingUnsequencedGroup := p.OutgoingUnsequencedGroup
 	incomingUnsequencedGroup := p.IncomingUnsequencedGroup
 	unsequencedWindow := p.UnsequencedWindow
 
 	h.removePeerDispatch(p)
 	*p = peer.Peer{
 		OutgoingReliableSequenceNumber: outgoingReliableSequenceNumber,
+		OutgoingUnsequencedGroup:       outgoingUnsequencedGroup,
 		OutgoingPeerID:                 outgoingPeerID,
 		IncomingPeerID:                 incomingPeerID,
 		ConnectID:                      connectID,

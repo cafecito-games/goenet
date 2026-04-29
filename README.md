@@ -10,7 +10,7 @@
 
 ## Compatibility Target
 
-`goenet` is developed against the local ENet fork at `/Users/christian/CafecitoGames/enet`. Interoperability checks in [`interop/`](./interop) build and exercise that fork directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it.
+`goenet` is developed against an ENet fork snapshot vendored for interop checks in [`interop/vendor`](./interop/vendor). Interoperability checks in [`interop/`](./interop) build and exercise that source directly, and the current wire layout tracks the ENet `2.6.5` era protocol used by it. The interop harness uses that vendored source by default, or `ENET_SOURCE_DIR` when set.
 
 ## Installation
 
@@ -140,7 +140,7 @@ for {
 - `Service` advances the host state machine and returns the next public `Event`.
 - `EventNone` means the host serviced work or timed out without a user-visible event.
 - `PacketFlagReliable` maps to ENet reliable delivery.
-- `PacketFlagUnsequenced` maps to ENet unsequenced delivery.
+- `PacketFlagUnsequenced` maps to ENet unsequenced delivery for outbound and inbound packets.
 - `Connect`, `Send`, `Broadcast`, `Disconnect`, and `DisconnectLater` queue work. Call `Flush` to push queued outbound traffic immediately.
 - `Disconnect` is graceful for connected peers. During handshake states it follows ENet's immediate unsequenced disconnect path and resets the peer locally after flush.
 - `DisconnectNow` always uses the immediate unsequenced path: notify the remote peer, flush immediately, and reset the local peer without waiting for a later disconnect event.
@@ -156,7 +156,6 @@ The executable examples in [`examples/`](./examples) use the exported `goenet` p
 ## Current Limitations
 
 - Public address/introspection helpers are still minimal. The public API does not yet expose local bound address or remote peer address accessors.
-- Outbound unsequenced send is not implemented yet. `PacketFlagUnsequenced` exists, but the current send path still rejects public unsequenced packets.
 
 ## Development
 

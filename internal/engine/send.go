@@ -16,6 +16,7 @@ const (
 	protocolHeaderSizeWithSentTime    = 4
 	sendReliableCommandSize           = 6
 	sendUnreliableCommandSize         = 8
+	sendUnsequencedCommandSize        = 8
 )
 
 type outgoingSelection struct {
@@ -82,6 +83,30 @@ func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	return dst
 }
 
+type sendUnsequencedPayload struct {
+	channelID              uint8
+	reliableSequenceNumber uint16
+	unsequencedGroup       uint16
+	data                   []byte
+}
+
+func (p *sendUnsequencedPayload) setOutgoingSequenceNumbers(reliable, _ uint16) {
+	p.reliableSequenceNumber = reliable
+}
+
+// MarshalBinary appends the unsequenced payload wire encoding to dst.
+func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
+	start := len(dst)
+	dst = append(dst, make([]byte, 8+len(p.data))...)
+	dst[start] = byte(protocol.CommandSendUnsequenced | protocol.Command(protocol.CommandFlagUnsequenced))
+	dst[start+1] = p.channelID
+	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
+	binary.BigEndian.PutUint16(dst[start+4:start+6], p.unsequencedGroup)
+	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
+	copy(dst[start+8:], p.data)
+	return dst
+}
+
 func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if err := h.validatePacketSize(p, packet); err != nil {
 		return err
@@ -92,7 +117,19 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 		Packet:         packet,
 	}
 
-	if packet.Flags&core.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber == math.MaxUint16 {
+	if packet.Flags&(core.PacketFlagReliable|core.PacketFlagUnsequenced) == core.PacketFlagUnsequenced {
+		command.Command = peer.Command{
+			Header: peer.Header{
+				Command:   protocol.CommandSendUnsequenced,
+				ChannelID: channelID,
+				Flags:     protocol.CommandFlagUnsequenced,
+			},
+			Payload: &sendUnsequencedPayload{
+				channelID: channelID,
+				data:      append([]byte(nil), packet.Data...),
+			},
+		}
+	} else if packet.Flags&core.PacketFlagReliable != 0 || p.Channels[channelID].OutgoingUnreliableSequenceNumber == math.MaxUint16 {
 		command.Command = peer.Command{
 			Header: peer.Header{
 				Command:   protocol.CommandSendReliable,
@@ -403,9 +440,6 @@ func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
 }
 
 func (h *Host) validatePacketSize(p *peer.Peer, packet *core.Packet) error {
-	if packet.Flags&core.PacketFlagUnsequenced != 0 {
-		return fmt.Errorf("engine: unsequenced packets are not supported in task 5")
-	}
 	if len(packet.Data) > math.MaxUint16 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
@@ -419,7 +453,9 @@ func (h *Host) validatePacketSize(p *peer.Peer, packet *core.Packet) error {
 func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
 	commandSize := sendUnreliableCommandSize
 	requiresSentTime := false
-	if flags&core.PacketFlagReliable != 0 {
+	if flags&(core.PacketFlagReliable|core.PacketFlagUnsequenced) == core.PacketFlagUnsequenced {
+		commandSize = sendUnsequencedCommandSize
+	} else if flags&core.PacketFlagReliable != 0 {
 		requiresSentTime = true
 		commandSize = sendReliableCommandSize
 	}
@@ -451,9 +487,6 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 	if channelID != 0xFF && int(channelID) >= len(p.Channels) {
 		return fmt.Errorf("engine: channel %d out of range", channelID)
 	}
-	if command.Command.Header.Flags&protocol.CommandFlagUnsequenced != 0 {
-		return fmt.Errorf("engine: unsequenced commands are not supported in task 5")
-	}
 
 	var reliable, unreliable uint16
 	switch {
@@ -465,6 +498,8 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 		channel.OutgoingReliableSequenceNumber++
 		channel.OutgoingUnreliableSequenceNumber = 0
 		reliable = channel.OutgoingReliableSequenceNumber
+	case command.Command.Header.Flags&protocol.CommandFlagUnsequenced != 0:
+		p.OutgoingUnsequencedGroup++
 	default:
 		channel := &p.Channels[channelID]
 		channel.OutgoingUnreliableSequenceNumber++
@@ -485,6 +520,9 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 
 	if sequencer, ok := command.Command.Payload.(outgoingPayloadSequencer); ok {
 		sequencer.setOutgoingSequenceNumbers(reliable, unreliable)
+	}
+	if payload, ok := command.Command.Payload.(*sendUnsequencedPayload); ok {
+		payload.unsequencedGroup = p.OutgoingUnsequencedGroup
 	}
 
 	return nil

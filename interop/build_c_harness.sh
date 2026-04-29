@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-default_enet_root="/Users/christian/CafecitoGames/enet"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+default_enet_root="$script_dir/vendor"
 enet_root="${ENET_SOURCE_DIR:-$default_enet_root}"
-output="${1:-$(cd "$(dirname "$0")" && pwd)/enet-harness}"
+output="${1:-$script_dir/enet-harness}"
 
 if [[ ! -f "$enet_root/include/enet.h" ]]; then
-  echo "expected ENet header at $enet_root/include/enet.h" >&2
+  echo "expected ENet header at $enet_root/include/enet.h; set ENET_SOURCE_DIR to override" >&2
   exit 1
 fi
 
 mkdir -p "$(dirname "$output")"
 
-cc -std=c99 -Wall -Wextra -Wno-unused-parameter -I"$enet_root/include" -x c - -o "$output" <<'EOF'
+cc -std=c99 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200112L -D_DARWIN_C_SOURCE -Wall -Wextra -Wno-unused-parameter -I"$enet_root/include" -x c - -o "$output" <<'EOF'
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>

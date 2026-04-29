@@ -77,6 +77,24 @@ func TestGoServerTalksToCClient(t *testing.T) {
 	}
 }
 
+func TestBuildHarnessWithVendoredENet(t *testing.T) {
+	script := filepath.Join(interopDir(t), "build_c_harness.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatal(err)
+	}
+
+	output := filepath.Join(t.TempDir(), "enet-harness")
+	cmd := exec.Command(script, output)
+	cmd.Env = append(os.Environ(), "ENET_SOURCE_DIR="+filepath.Join(interopDir(t), "vendor"))
+	result, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build harness with vendored enet: %v\n%s", err, result)
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("vendored harness output missing: %v", err)
+	}
+}
+
 type udpSocket struct {
 	conn *net.UDPConn
 }
@@ -185,7 +203,6 @@ func buildHarness(t *testing.T) string {
 
 	output := filepath.Join(t.TempDir(), "enet-harness")
 	cmd := exec.Command(script, output)
-	cmd.Env = append(os.Environ(), "ENET_SOURCE_DIR=/Users/christian/CafecitoGames/enet")
 	result, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build harness: %v\n%s", err, result)

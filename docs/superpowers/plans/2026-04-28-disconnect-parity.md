@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the behavior change at the engine boundary where ENet state semantics belong. Extend `internal/engine.Host.Disconnect` with the missing non-connected branch, add `internal/engine.Host.DisconnectNow`, and expose a thin public wrapper on `goenet.Peer`. Verify behavior from the public API boundary with wire-shape and state-reset tests.
 
-**Tech Stack:** Go 1.26, `go test`, Taskfile, existing fake socket test harness, local ENet fork semantics from `/Users/christian/CafecitoGames/enet/include/enet.h`
+**Tech Stack:** Go 1.26, `go test`, Taskfile, existing fake socket test harness, local ENet fork semantics from the ENet reference header used for interop checks
 
 ---
 
