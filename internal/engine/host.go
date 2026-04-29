@@ -275,7 +275,7 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 	}
 
 	p = h.configurePeer(p, index, addr, core.PeerStateConnecting)
-	p.Channels = make([]peer.Channel, requestedChannels)
+	p.Channels = make([]*peer.Channel, requestedChannels)
 	for i := range p.Channels {
 		p.Channels[i] = peer.NewChannel()
 	}
@@ -323,7 +323,7 @@ func (h *Host) newPeerSlot(index int) *peer.Peer {
 }
 
 func (h *Host) configurePeer(p *peer.Peer, index int, addr core.Address, state core.PeerState) *peer.Peer {
-	channels := make([]peer.Channel, h.config.ChannelLimit)
+	channels := make([]*peer.Channel, h.config.ChannelLimit)
 	for i := range channels {
 		channels[i] = peer.NewChannel()
 	}
@@ -428,6 +428,33 @@ func (h *Host) outboundWindowSize() uint32 {
 
 	windowSize := (h.outgoingBandwidth / peerWindowSizeScale) * protocol.MinimumWindowSize
 	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+}
+
+// negotiatedPeerWindowSize replicates the C ENet `peer->windowSize` derivation in
+// enet_protocol_handle_connect (enet.h:1934-1945): MAX when one side advertises
+// zero, MIN when both have non-zero caps, clamped to the protocol window range.
+func negotiatedPeerWindowSize(hostOutgoing, peerIncoming uint32) uint32 {
+	var windowSize uint32
+	switch {
+	case hostOutgoing == 0 && peerIncoming == 0:
+		windowSize = protocol.MaximumWindowSize
+	case hostOutgoing == 0 || peerIncoming == 0:
+		windowSize = (maxUint32(hostOutgoing, peerIncoming) / peerWindowSizeScale) * protocol.MinimumWindowSize
+	default:
+		windowSize = (minUint32(hostOutgoing, peerIncoming) / peerWindowSizeScale) * protocol.MinimumWindowSize
+	}
+	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+}
+
+// verifyConnectWindowSize replicates the C ENet `windowSize` derivation in
+// enet_protocol_handle_connect (enet.h:1948-1962) used to populate the
+// VerifyConnect command's window size before MIN-clamping against the peer's
+// requested window.
+func verifyConnectWindowSize(hostIncoming uint32) uint32 {
+	if hostIncoming == 0 {
+		return protocol.MaximumWindowSize
+	}
+	return (hostIncoming / peerWindowSizeScale) * protocol.MinimumWindowSize
 }
 
 func (h *Host) hasOutgoingCommands(p *peer.Peer) bool {

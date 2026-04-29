@@ -22,7 +22,7 @@ type Peer struct {
 	MTU                            uint32
 	Address                        core.Address
 	State                          core.PeerState
-	Channels                       []Channel
+	Channels                       []*Channel
 	IncomingBandwidth              uint32
 	OutgoingBandwidth              uint32
 	IncomingDataTotal              uint32

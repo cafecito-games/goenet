@@ -150,3 +150,24 @@ func TestIncomingQueuePreservesFIFOOrder(t *testing.T) {
 		t.Fatalf("iterated %d elements, want %d", index, len(want))
 	}
 }
+
+func TestIncomingUnreliableLessHandlesUint16Wrap(t *testing.T) {
+	// Within one reliable group, two unreliable seq numbers straddling the
+	// uint16 wrap should order by signed-distance: 0xFFFE < 0x0002.
+	const reliable uint16 = 5
+	earlier := &IncomingCommand{
+		ReliableSequenceNumber:   reliable,
+		UnreliableSequenceNumber: 0xFFFE,
+	}
+	later := &IncomingCommand{
+		ReliableSequenceNumber:   reliable,
+		UnreliableSequenceNumber: 0x0002,
+	}
+
+	if !incomingUnreliableLess(reliable, earlier, later) {
+		t.Fatal("incomingUnreliableLess: expected 0xFFFE < 0x0002 across uint16 wrap")
+	}
+	if incomingUnreliableLess(reliable, later, earlier) {
+		t.Fatal("incomingUnreliableLess: comparator must be antisymmetric across wrap")
+	}
+}

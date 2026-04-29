@@ -269,6 +269,53 @@ func TestParseCommandRejectsTruncatedPayloads(t *testing.T) {
 	}
 }
 
+func TestParseSendFragmentRejectsHostileFragmentCount(t *testing.T) {
+	t.Parallel()
+
+	// 24-byte fragment header + zero-length data. FragmentCount at bytes 8..12.
+	build := func(fragmentCount, fragmentNumber uint32) []byte {
+		wire := []byte{
+			0x88, 0x01, 0x00, 0x0f, // header
+			0x00, 0x00, 0x00, 0x00, // start sequence + dataLength
+			0x00, 0x00, 0x00, 0x00, // fragmentCount
+			0x00, 0x00, 0x00, 0x00, // fragmentNumber
+			0x00, 0x00, 0x00, 0x00, // totalLength
+			0x00, 0x00, 0x00, 0x00, // fragmentOffset
+		}
+		// fragmentCount at offset 8
+		wire[8] = byte(fragmentCount >> 24)
+		wire[9] = byte(fragmentCount >> 16)
+		wire[10] = byte(fragmentCount >> 8)
+		wire[11] = byte(fragmentCount)
+		// fragmentNumber at offset 12
+		wire[12] = byte(fragmentNumber >> 24)
+		wire[13] = byte(fragmentNumber >> 16)
+		wire[14] = byte(fragmentNumber >> 8)
+		wire[15] = byte(fragmentNumber)
+		return wire
+	}
+
+	tests := []struct {
+		name           string
+		fragmentCount  uint32
+		fragmentNumber uint32
+	}{
+		{name: "zero count", fragmentCount: 0, fragmentNumber: 0},
+		{name: "above maximum", fragmentCount: protocol.MaximumFragmentCount + 1, fragmentNumber: 0},
+		{name: "max uint32", fragmentCount: 0xFFFFFFFF, fragmentNumber: 0},
+		{name: "number out of range", fragmentCount: 4, fragmentNumber: 4},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, _, err := protocol.ParseCommand(build(tt.fragmentCount, tt.fragmentNumber)); err == nil {
+				t.Fatalf("ParseCommand accepted hostile fragmentCount=%d fragmentNumber=%d", tt.fragmentCount, tt.fragmentNumber)
+			}
+		})
+	}
+}
+
 func TestAdditionalCommandRoundTrips(t *testing.T) {
 	t.Parallel()
 

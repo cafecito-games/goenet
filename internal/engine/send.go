@@ -574,14 +574,14 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 		p.OutgoingReliableSequenceNumber++
 		reliable = p.OutgoingReliableSequenceNumber
 	case commandRequiresAck(command):
-		channel := &p.Channels[channelID]
+		channel := p.Channels[channelID]
 		channel.OutgoingReliableSequenceNumber++
 		channel.OutgoingUnreliableSequenceNumber = 0
 		reliable = channel.OutgoingReliableSequenceNumber
 	case command.Command.Header.Flags&protocol.CommandFlagUnsequenced != 0:
 		p.OutgoingUnsequencedGroup++
 	default:
-		channel := &p.Channels[channelID]
+		channel := p.Channels[channelID]
 		channel.OutgoingUnreliableSequenceNumber++
 		reliable = channel.OutgoingReliableSequenceNumber
 		unreliable = channel.OutgoingUnreliableSequenceNumber

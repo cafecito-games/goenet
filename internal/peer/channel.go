@@ -18,8 +18,12 @@ type Channel struct {
 }
 
 // NewChannel returns a zero-initialized channel state holder.
-func NewChannel() Channel {
-	return Channel{}
+//
+// Channels must be addressed by pointer because the queue insertion methods
+// mutate per-channel state through pointer receivers. Callers should hold
+// []*Channel slices, never []Channel values.
+func NewChannel() *Channel {
+	return &Channel{}
 }
 
 // InsertIncomingReliableOrdered only maintains ENet receive ordering.
@@ -70,7 +74,11 @@ func incomingUnreliableLess(anchor uint16, a, b *IncomingCommand) bool {
 		return aReliable < bReliable
 	}
 
-	return a.UnreliableSequenceNumber < b.UnreliableSequenceNumber
+	// Within one reliable group the unreliable sequence is a uint16 that can
+	// wrap. A naive `<` misorders pairs straddling 0xFFFF/0x0000. int16-cast
+	// difference gives the standard signed-wrap comparison and treats the
+	// shorter modular distance as "earlier".
+	return int16(a.UnreliableSequenceNumber-b.UnreliableSequenceNumber) < 0
 }
 
 func sequenceDistance(anchor, sequence uint16) uint32 {

@@ -29,6 +29,10 @@ const (
 	MaximumPeerID uint16 = 0x0FFF
 	// UnsequencedWindowSize is ENet's per-peer unsequenced acknowledgment window in commands.
 	UnsequencedWindowSize uint32 = 1024
+	// MaximumFragmentCount caps the number of fragments per logical packet — must
+	// match ENET_PROTOCOL_MAXIMUM_FRAGMENT_COUNT in the C reference. Used to reject
+	// hostile peer-controlled values before fragment-state allocation.
+	MaximumFragmentCount uint32 = 1024 * 1024
 
 	// CommandNone is a zero-value placeholder and not a valid on-the-wire command.
 	CommandNone Command = 0

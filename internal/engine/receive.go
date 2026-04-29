@@ -355,7 +355,7 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 	selected.MTU = minUint32(h.config.MTU, clampUint32(command.MTU, protocol.MinimumMTU, protocol.MaximumMTU))
 	selected.IncomingBandwidth = command.IncomingBandwidth
 	selected.OutgoingBandwidth = command.OutgoingBandwidth
-	selected.Channels = make([]peer.Channel, channelCount)
+	selected.Channels = make([]*peer.Channel, channelCount)
 	for i := range selected.Channels {
 		selected.Channels[i] = peer.NewChannel()
 	}
@@ -367,10 +367,13 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 
 	runtime := h.runtime[selected]
 	runtime.eventData = command.Data
-	runtime.windowSize = clampUint32(command.WindowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
+	runtime.windowSize = negotiatedPeerWindowSize(h.outgoingBandwidth, selected.IncomingBandwidth)
 	selected.PacketThrottleInterval = command.PacketThrottleInterval
 	selected.PacketThrottleAcceleration = command.PacketThrottleAcceleration
 	selected.PacketThrottleDeceleration = command.PacketThrottleDeceleration
+
+	verifyWindowSize := minUint32(verifyConnectWindowSize(h.incomingBandwidth), command.WindowSize)
+	verifyWindowSize = clampUint32(verifyWindowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
 
 	verify := protocol.VerifyConnect{
 		Header: protocol.CommandHeader{
@@ -380,10 +383,12 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 		IncomingSessionID:          incomingSessionID,
 		OutgoingSessionID:          outgoingSessionID,
 		MTU:                        selected.MTU,
-		WindowSize:                 runtime.windowSize,
+		WindowSize:                 verifyWindowSize,
 		ChannelCount:               channelCount,
-		IncomingBandwidth:          0,
-		OutgoingBandwidth:          0,
+		// Advertise the host's actual bandwidth caps so the remote peer can do its
+		// half of the bandwidth/window negotiation (matches enet.h:1972-1973).
+		IncomingBandwidth:          h.incomingBandwidth,
+		OutgoingBandwidth:          h.outgoingBandwidth,
 		PacketThrottleInterval:     selected.PacketThrottleInterval,
 		PacketThrottleAcceleration: selected.PacketThrottleAcceleration,
 		PacketThrottleDeceleration: selected.PacketThrottleDeceleration,
@@ -445,8 +450,12 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 		return true
 	}
 
+	// Reconstruct the 32-bit sent time from a 16-bit wire field. The MSB-of-low-word
+	// heuristic mirrors C ENet's enet_protocol_handle_acknowledge: if the received
+	// low-word bit-15 is set above the corresponding bit in the *low 16 bits* of
+	// serviceTime, the wire timestamp belongs to the previous 16-bit epoch.
 	receivedSentTime := uint32(command.ReceivedSentTime) | (h.serviceTime & 0xFFFF0000)
-	if (receivedSentTime & 0x8000) > (h.serviceTime & 0x8000) {
+	if (receivedSentTime & 0x8000) > (h.serviceTime & 0xFFFF & 0x8000) {
 		receivedSentTime -= 0x10000
 	}
 	if timeutil.Less(h.serviceTime, receivedSentTime) {
@@ -645,7 +654,7 @@ func (h *Host) handleSendFragment(p *peer.Peer, command protocol.SendFragment) i
 		return inboundIgnore
 	}
 
-	channel := &p.Channels[command.Header.ChannelID]
+	channel := p.Channels[command.Header.ChannelID]
 	startSequence := command.StartSequenceNumber
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, startSequence) {
 		return inboundIgnore
@@ -706,7 +715,7 @@ func (h *Host) handleSendUnreliableFragment(p *peer.Peer, command protocol.SendF
 		return inboundIgnore
 	}
 
-	channel := &p.Channels[command.Header.ChannelID]
+	channel := p.Channels[command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, command.Header.ReliableSequenceNumber) {
 		return inboundIgnore
 	}
@@ -764,9 +773,18 @@ func (h *Host) handleBandwidthLimit(p *peer.Peer, command protocol.BandwidthLimi
 	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
 		return false
 	}
+	if p.IncomingBandwidth != 0 {
+		h.bandwidthLimitedPeers--
+	}
 	p.IncomingBandwidth = command.IncomingBandwidth
 	p.OutgoingBandwidth = command.OutgoingBandwidth
-	h.runtime[p].windowSize = protocol.MaximumWindowSize
+	if p.IncomingBandwidth != 0 {
+		h.bandwidthLimitedPeers++
+	}
+	// Recompute the per-peer window from the negotiated bandwidth pair so we
+	// don't blanket-reset to MaximumWindowSize on every BandwidthLimit command.
+	h.runtime[p].windowSize = negotiatedPeerWindowSize(h.outgoingBandwidth, p.IncomingBandwidth)
+	h.recalculateBandwidthLimits = true
 	return true
 }
 
@@ -784,7 +802,7 @@ func (h *Host) queueReliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingComm
 	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
-	channel := &p.Channels[cmd.Command.Header.ChannelID]
+	channel := p.Channels[cmd.Command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, cmd.ReliableSequenceNumber) {
 		return inboundIgnore
 	}
@@ -815,7 +833,7 @@ func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCo
 	if p.State == core.PeerStateDisconnectLater {
 		return inboundIgnore
 	}
-	channel := &p.Channels[cmd.Command.Header.ChannelID]
+	channel := p.Channels[cmd.Command.Header.ChannelID]
 	if !reliableSequenceWithinWindow(channel.IncomingReliableSequenceNumber, cmd.ReliableSequenceNumber) {
 		return inboundIgnore
 	}
@@ -926,6 +944,9 @@ func shouldDropUnreliable(channel *peer.Channel, cmd *peer.IncomingCommand) bool
 func (h *Host) dispatchEvent() (Event, bool) {
 	for len(h.dispatchQ) > 0 {
 		p := h.dispatchQ[0]
+		// Nil the popped slot so the backing array does not retain a peer
+		// pointer past its useful life (lets GC reclaim reset peers).
+		h.dispatchQ[0] = nil
 		h.dispatchQ = h.dispatchQ[1:]
 		delete(h.dispatchSet, p)
 
@@ -1118,7 +1139,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 		}
 	}
 	if int(header.ChannelID) < len(p.Channels) {
-		channel := &p.Channels[header.ChannelID]
+		channel := p.Channels[header.ChannelID]
 		reliableWindow := header.ReliableSequenceNumber / peerReliableWindowSize
 		currentWindow := channel.IncomingReliableSequenceNumber / peerReliableWindowSize
 		if header.ReliableSequenceNumber < channel.IncomingReliableSequenceNumber {

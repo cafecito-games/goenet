@@ -279,13 +279,21 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 }
 
 func (h *Host) translateEvent(event engine.Event) Event {
-	return Event{
+	wrapped := h.wrapPeer(event.Peer)
+	out := Event{
 		Type:      EventType(event.Type),
-		Peer:      h.wrapPeer(event.Peer),
+		Peer:      wrapped,
 		ChannelID: event.ChannelID,
 		Data:      event.Data,
 		Packet:    fromCorePacket(event.Packet),
 	}
+	// After surfacing a terminal peer event, drop the wrapper from the map so a
+	// future re-use of the same engine peer slot allocates a fresh public Peer
+	// rather than keeping the caller's stale handle bound to a new session.
+	if event.Peer != nil && (event.Type == core.EventDisconnect || event.Type == core.EventDisconnectTimeout) {
+		delete(h.peers, event.Peer)
+	}
+	return out
 }
 
 func durationMillis(timeout time.Duration) uint32 {
