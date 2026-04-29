@@ -320,7 +320,7 @@ func TestPeerSendQueuesOutboundPayloadAndFlushes(t *testing.T) {
 	}
 }
 
-func TestPeerDisconnectQueuesDisconnectCommand(t *testing.T) {
+func TestDisconnectOnConnectedPeerQueuesAcknowledgedDisconnect(t *testing.T) {
 	host, sock := newTestHost()
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
 	baselineWrites := sock.WriteCount()

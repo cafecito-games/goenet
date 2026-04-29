@@ -39,6 +39,7 @@ Peer operations:
 - `Peer.State() PeerState`
 - `Peer.Send(channelID uint8, packet *Packet) error`
 - `Peer.Disconnect(data uint32) error`
+- `Peer.DisconnectNow(data uint32) error`
 - `Peer.DisconnectLater(data uint32) error`
 - `Peer.Reset()`
 
@@ -141,6 +142,8 @@ for {
 - `PacketFlagReliable` maps to ENet reliable delivery.
 - `PacketFlagUnsequenced` maps to ENet unsequenced delivery.
 - `Connect`, `Send`, `Broadcast`, `Disconnect`, and `DisconnectLater` queue work. Call `Flush` to push queued outbound traffic immediately.
+- `Disconnect` is graceful for connected peers. During handshake states it follows ENet's immediate unsequenced disconnect path and resets the peer locally after flush.
+- `DisconnectNow` always uses the immediate unsequenced path: notify the remote peer, flush immediately, and reset the local peer without waiting for a later disconnect event.
 
 ## Examples
 
@@ -153,7 +156,7 @@ The executable examples in [`examples/`](./examples) use the exported `goenet` p
 ## Current Limitations
 
 - Public address/introspection helpers are still minimal. The public API does not yet expose local bound address or remote peer address accessors.
-- Connected-flow disconnects are usable, but handshake-state disconnect behavior is not yet a byte-for-byte match for ENet's special unsequenced fast path.
+- `DisconnectNow` is available, but the public API still does not expose ENet's full disconnect method family beyond `Disconnect`, `DisconnectNow`, `DisconnectLater`, and `Reset`.
 
 ## Development
 
