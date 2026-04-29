@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/cafecito-games/goenet/internal/core"
@@ -132,27 +133,79 @@ func (h *Host) Disconnect(p *peer.Peer, data uint32) error {
 		p.State == core.PeerStateZombie {
 		return nil
 	}
-	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
-		return fmt.Errorf("engine: peer not connected")
-	}
 
 	h.clearPeerQueues(p)
-	if err := h.queueOutgoingControlCommand(p, peer.Command{
-		Header: peer.Header{
-			Command:   protocol.CommandDisconnect,
-			ChannelID: 0xFF,
-			Flags:     protocol.CommandFlagAcknowledge,
-		},
-		Payload: &protocol.Disconnect{
-			Data: data,
-		},
-	}); err != nil {
-		return err
+	if p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater {
+		if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagAcknowledge); err != nil {
+			return err
+		}
+
+		h.runtime[p].eventData = data
+		h.runtime[p].disconnectLater = false
+		p.State = core.PeerStateDisconnecting
+		return nil
 	}
 
-	h.runtime[p].eventData = data
-	h.runtime[p].disconnectLater = false
-	p.State = core.PeerStateDisconnecting
+	if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
+		return err
+	}
+	if err := h.Flush(context.Background()); err != nil {
+		return err
+	}
+	h.resetPeer(p)
+	return nil
+}
+
+func (h *Host) DisconnectNow(p *peer.Peer, data uint32) error {
+	if p == nil {
+		return fmt.Errorf("engine: nil peer")
+	}
+	if p.State == core.PeerStateDisconnected {
+		return nil
+	}
+	if p.State != core.PeerStateZombie && p.State != core.PeerStateDisconnecting {
+		h.clearPeerQueues(p)
+		if err := h.queueDisconnectCommand(p, data, protocol.CommandFlagUnsequenced); err != nil {
+			return err
+		}
+		if err := h.Flush(context.Background()); err != nil {
+			return err
+		}
+	}
+
+	h.resetPeer(p)
+	return nil
+}
+
+func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.CommandFlag) error {
+	command := &peer.OutgoingCommand{
+		Command: peer.Command{
+			Header: peer.Header{
+				Command:   protocol.CommandDisconnect,
+				ChannelID: 0xFF,
+				Flags:     flags,
+			},
+			Payload: &protocol.Disconnect{
+				Data: data,
+			},
+		},
+	}
+	if flags&protocol.CommandFlagUnsequenced == 0 {
+		return h.setupAndQueueOutgoingCommand(p, command)
+	}
+
+	p.OutgoingReliableSequenceNumber++
+	command.ReliableSequenceNumber = p.OutgoingReliableSequenceNumber
+	command.UnreliableSequenceNumber = 0
+	command.SendAttempts = 0
+	command.SentTime = 0
+	command.RoundTripTimeout = 0
+	p.OutgoingDataTotal += uint32(commandWireSize(command))
+	h.totalQueued++
+	command.QueueTime = h.totalQueued
+	command.Command.Header.ReliableSequenceNumber = command.ReliableSequenceNumber
+	applyOutgoingHeader(command.Command.Payload, command.Command.Header)
+	p.OutgoingCommands.PushBack(command)
 	return nil
 }
 

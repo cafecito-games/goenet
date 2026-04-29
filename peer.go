@@ -67,6 +67,22 @@ func (p *Peer) Disconnect(data uint32) error {
 	return nil
 }
 
+// DisconnectNow forcefully notifies the remote peer, flushes immediately, and resets locally.
+func (p *Peer) DisconnectNow(data uint32) error {
+	if p == nil || p.host == nil || p.raw == nil {
+		return fmt.Errorf("goenet: nil peer")
+	}
+	if p.host.closed.Load() {
+		return errHostClosed
+	}
+	if err := p.host.engine.DisconnectNow(p.raw, data); err != nil {
+		return err
+	}
+
+	p.state = fromCorePeerState(p.raw.State)
+	return nil
+}
+
 // DisconnectLater defers disconnect until outbound reliable work drains.
 func (p *Peer) DisconnectLater(data uint32) error {
 	if p == nil || p.host == nil || p.raw == nil {
