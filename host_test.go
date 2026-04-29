@@ -416,6 +416,94 @@ func TestPeerDisconnectLaterQueuesDisconnectAfterPendingReliableAck(t *testing.T
 	}
 }
 
+func TestDisconnectOnConnectingPeerFlushesUnsequencedDisconnectAndResets(t *testing.T) {
+	host, sock := newTestHost()
+
+	peer, err := host.Connect("127.0.0.1:9001", 1, 0xCAFE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := peer.Disconnect(0xDEAD); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.State(); got != PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
+	}
+	if got := sock.WriteCount(); got != 1 {
+		t.Fatalf("write count = %d, want 1", got)
+	}
+
+	write := sock.MustWrite(t, 0)
+	header, command := mustSingleCommand(t, write.Payload)
+	if header.PeerID != protocol.MaximumPeerID {
+		t.Fatalf("header peer id = %d, want %d", header.PeerID, protocol.MaximumPeerID)
+	}
+
+	disconnect, ok := command.(protocol.Disconnect)
+	if !ok {
+		t.Fatalf("disconnect command type = %T", command)
+	}
+	if disconnect.Header.ChannelID != 0xFF {
+		t.Fatalf("disconnect channel id = %d, want 255", disconnect.Header.ChannelID)
+	}
+	if disconnect.Header.Flags != protocol.CommandFlagUnsequenced {
+		t.Fatalf("disconnect flags = 0x%02x, want 0x%02x", disconnect.Header.Flags, protocol.CommandFlagUnsequenced)
+	}
+	if disconnect.Data != 0xDEAD {
+		t.Fatalf("disconnect data = %#x, want %#x", disconnect.Data, uint32(0xDEAD))
+	}
+}
+
+func TestDisconnectNowFlushesUnsequencedDisconnectAndResetsConnectedPeer(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	disconnectNow := mustDisconnectNowPeer(t, peer)
+	if err := disconnectNow.DisconnectNow(0xBEEF); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.State(); got != PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
+	}
+	if got := sock.WriteCount(); got != baselineWrites+1 {
+		t.Fatalf("write count = %d, want %d", got, baselineWrites+1)
+	}
+
+	write := sock.MustWrite(t, baselineWrites)
+	_, command := mustSingleCommand(t, write.Payload)
+	disconnect, ok := command.(protocol.Disconnect)
+	if !ok {
+		t.Fatalf("disconnect command type = %T", command)
+	}
+	if disconnect.Header.Flags != protocol.CommandFlagUnsequenced {
+		t.Fatalf("disconnect flags = 0x%02x, want 0x%02x", disconnect.Header.Flags, protocol.CommandFlagUnsequenced)
+	}
+	if disconnect.Data != 0xBEEF {
+		t.Fatalf("disconnect data = %#x, want %#x", disconnect.Data, uint32(0xBEEF))
+	}
+}
+
+func TestDisconnectNowOnDisconnectedPeerIsSafe(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	disconnectNow := mustDisconnectNowPeer(t, peer)
+	peer.Reset()
+
+	if err := disconnectNow.DisconnectNow(1); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.State(); got != PeerStateDisconnected {
+		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
+	}
+	if got := sock.WriteCount(); got != baselineWrites {
+		t.Fatalf("write count = %d, want %d", got, baselineWrites)
+	}
+}
+
 func TestPeerResetInvalidatesStateLocally(t *testing.T) {
 	host, sock := newTestHost()
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
@@ -493,6 +581,21 @@ func newConfiguredTestHost(cfg Config) (*Host, *testsupport.FakeSocket) {
 
 	sock := testsupport.NewFakeSocket()
 	return newHostWithSocket(normalized, sock), sock
+}
+
+type disconnectNowPeer interface {
+	DisconnectNow(data uint32) error
+}
+
+func mustDisconnectNowPeer(t *testing.T, peer *Peer) disconnectNowPeer {
+	t.Helper()
+
+	disconnectNow, ok := any(peer).(disconnectNowPeer)
+	if !ok {
+		t.Fatal("Peer does not implement DisconnectNow(data uint32) error")
+	}
+
+	return disconnectNow
 }
 
 func mustConnectAndVerifyPeer(t *testing.T, host *Host, sock *testsupport.FakeSocket, addr string, data uint32) *Peer {
