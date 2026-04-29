@@ -93,13 +93,15 @@ type Acknowledgement struct {
 	Command  Command
 }
 
-type listElement[T any] struct {
+// ListElement is one node in an orderedList.
+type ListElement[T any] struct {
 	value T
-	prev  *listElement[T]
-	next  *listElement[T]
+	prev  *ListElement[T]
+	next  *ListElement[T]
 }
 
-func (e *listElement[T]) Next() *listElement[T] {
+// Next returns the next element in the list or nil.
+func (e *ListElement[T]) Next() *ListElement[T] {
 	if e == nil {
 		return nil
 	}
@@ -107,7 +109,8 @@ func (e *listElement[T]) Next() *listElement[T] {
 	return e.next
 }
 
-func (e *listElement[T]) Prev() *listElement[T] {
+// Prev returns the previous element in the list or nil.
+func (e *ListElement[T]) Prev() *ListElement[T] {
 	if e == nil {
 		return nil
 	}
@@ -115,30 +118,35 @@ func (e *listElement[T]) Prev() *listElement[T] {
 	return e.prev
 }
 
-func (e *listElement[T]) Value() T {
+// Value returns the element payload.
+func (e *ListElement[T]) Value() T {
 	return e.value
 }
 
 type orderedList[T any] struct {
-	front *listElement[T]
-	back  *listElement[T]
+	front *ListElement[T]
+	back  *ListElement[T]
 	len   int
 }
 
+// Len returns the number of elements in the list.
 func (l *orderedList[T]) Len() int {
 	return l.len
 }
 
-func (l *orderedList[T]) Front() *listElement[T] {
+// Front returns the first element in the list.
+func (l *orderedList[T]) Front() *ListElement[T] {
 	return l.front
 }
 
-func (l *orderedList[T]) Back() *listElement[T] {
+// Back returns the last element in the list.
+func (l *orderedList[T]) Back() *ListElement[T] {
 	return l.back
 }
 
-func (l *orderedList[T]) PushBack(value T) *listElement[T] {
-	elem := &listElement[T]{value: value}
+// PushBack appends value to the end of the list.
+func (l *orderedList[T]) PushBack(value T) *ListElement[T] {
+	elem := &ListElement[T]{value: value}
 	if l.back == nil {
 		l.front = elem
 		l.back = elem
@@ -153,12 +161,13 @@ func (l *orderedList[T]) PushBack(value T) *listElement[T] {
 	return elem
 }
 
-func (l *orderedList[T]) InsertBefore(mark *listElement[T], value T) *listElement[T] {
+// InsertBefore inserts value immediately before mark.
+func (l *orderedList[T]) InsertBefore(mark *ListElement[T], value T) *ListElement[T] {
 	if mark == nil {
 		return l.PushBack(value)
 	}
 
-	elem := &listElement[T]{
+	elem := &ListElement[T]{
 		value: value,
 		prev:  mark.prev,
 		next:  mark,
@@ -173,7 +182,8 @@ func (l *orderedList[T]) InsertBefore(mark *listElement[T], value T) *listElemen
 	return elem
 }
 
-func (l *orderedList[T]) InsertOrdered(value T, less func(a, b T) bool) *listElement[T] {
+// InsertOrdered inserts value before the first element that sorts after it.
+func (l *orderedList[T]) InsertOrdered(value T, less func(a, b T) bool) *ListElement[T] {
 	for elem := l.front; elem != nil; elem = elem.next {
 		if less(value, elem.value) {
 			return l.InsertBefore(elem, value)
@@ -183,7 +193,8 @@ func (l *orderedList[T]) InsertOrdered(value T, less func(a, b T) bool) *listEle
 	return l.PushBack(value)
 }
 
-func (l *orderedList[T]) Remove(elem *listElement[T]) T {
+// Remove removes elem from the list and returns its payload.
+func (l *orderedList[T]) Remove(elem *ListElement[T]) T {
 	var zero T
 	if elem == nil {
 		return zero

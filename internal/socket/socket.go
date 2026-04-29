@@ -1,3 +1,4 @@
+// Package socket provides the narrow datagram I/O abstraction used by the host runtime.
 package socket
 
 import (

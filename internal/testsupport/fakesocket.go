@@ -1,3 +1,4 @@
+// Package testsupport provides deterministic helpers for internal tests.
 package testsupport
 
 import (
@@ -27,10 +28,12 @@ type FakeSocket struct {
 	writeErr error
 }
 
+// NewFakeSocket returns an empty scripted socket stub.
 func NewFakeSocket() *FakeSocket {
 	return &FakeSocket{}
 }
 
+// ReadPacket returns the next scripted inbound datagram or error.
 func (s *FakeSocket) ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, error) {
 	select {
 	case <-ctx.Done():
@@ -56,6 +59,7 @@ func (s *FakeSocket) ReadPacket(ctx context.Context, buf []byte) (int, netip.Add
 	return n, read.Addr, nil
 }
 
+// WritePacket records one outbound datagram unless a scripted write error is set.
 func (s *FakeSocket) WritePacket(ctx context.Context, addr netip.AddrPort, payload []byte) (int, error) {
 	select {
 	case <-ctx.Done():
@@ -75,18 +79,22 @@ func (s *FakeSocket) WritePacket(ctx context.Context, addr netip.AddrPort, paylo
 	return len(payload), nil
 }
 
+// Close satisfies the socket interface for tests.
 func (s *FakeSocket) Close() error {
 	return nil
 }
 
+// WriteCount reports how many outbound datagrams have been recorded.
 func (s *FakeSocket) WriteCount() int {
 	return len(s.writes)
 }
 
+// SetWriteError makes future writes fail with err.
 func (s *FakeSocket) SetWriteError(err error) {
 	s.writeErr = err
 }
 
+// QueueInbound appends one scripted inbound datagram.
 func (s *FakeSocket) QueueInbound(addr netip.AddrPort, payload []byte) {
 	copyPayload := append([]byte(nil), payload...)
 	s.reads = append(s.reads, SocketRead{
@@ -95,10 +103,12 @@ func (s *FakeSocket) QueueInbound(addr netip.AddrPort, payload []byte) {
 	})
 }
 
+// QueueReadError appends one scripted read failure.
 func (s *FakeSocket) QueueReadError(err error) {
 	s.reads = append(s.reads, SocketRead{Err: err})
 }
 
+// MustWrite returns the recorded write at index or fails the test.
 func (s *FakeSocket) MustWrite(t *testing.T, index int) SocketWrite {
 	t.Helper()
 

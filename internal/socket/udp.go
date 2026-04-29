@@ -17,6 +17,7 @@ func NewUDP(conn *net.UDPConn) *UDP {
 	return &UDP{conn: conn}
 }
 
+// ReadPacket reads one datagram into buf and returns its source address.
 func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := s.conn.SetReadDeadline(deadline); err != nil {
@@ -32,6 +33,7 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, netip.AddrPort, 
 	return n, addr, err
 }
 
+// WritePacket writes one datagram to addr.
 func (s *UDP) WritePacket(ctx context.Context, addr netip.AddrPort, payload []byte) (int, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := s.conn.SetWriteDeadline(deadline); err != nil {
@@ -46,6 +48,7 @@ func (s *UDP) WritePacket(ctx context.Context, addr netip.AddrPort, payload []by
 	return s.conn.WriteToUDPAddrPort(payload, addr)
 }
 
+// Close closes the underlying UDP connection.
 func (s *UDP) Close() error {
 	return s.conn.Close()
 }

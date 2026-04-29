@@ -54,7 +54,7 @@ type Peer struct {
 }
 
 // QueueDispatchedCommand appends a receive command to the peer dispatch queue.
-func (p *Peer) QueueDispatchedCommand(cmd *IncomingCommand) *listElement[*IncomingCommand] {
+func (p *Peer) QueueDispatchedCommand(cmd *IncomingCommand) *ListElement[*IncomingCommand] {
 	return p.DispatchedCommands.PushBack(cmd)
 }
 

@@ -1,4 +1,7 @@
+// Package peer holds the internal ENet peer, channel, and queue state machines.
 package peer
+
+import "math"
 
 const reliableWindowCount = 16
 
@@ -21,7 +24,7 @@ func NewChannel() Channel {
 
 // InsertIncomingReliableOrdered only maintains ENet receive ordering.
 // Duplicate, stale, and window validation stay in the engine receive path.
-func (ch *Channel) InsertIncomingReliableOrdered(cmd *IncomingCommand) *listElement[*IncomingCommand] {
+func (ch *Channel) InsertIncomingReliableOrdered(cmd *IncomingCommand) *ListElement[*IncomingCommand] {
 	return ch.IncomingReliableCommands.InsertOrdered(cmd, func(a, b *IncomingCommand) bool {
 		return incomingReliableLess(ch.IncomingReliableSequenceNumber, a, b)
 	})
@@ -29,7 +32,7 @@ func (ch *Channel) InsertIncomingReliableOrdered(cmd *IncomingCommand) *listElem
 
 // InsertIncomingUnreliableOrdered only maintains ENet receive ordering.
 // Duplicate, stale, and window validation stay in the engine receive path.
-func (ch *Channel) InsertIncomingUnreliableOrdered(cmd *IncomingCommand) *listElement[*IncomingCommand] {
+func (ch *Channel) InsertIncomingUnreliableOrdered(cmd *IncomingCommand) *ListElement[*IncomingCommand] {
 	return ch.IncomingUnreliableCommands.InsertOrdered(cmd, func(a, b *IncomingCommand) bool {
 		return incomingUnreliableLess(ch.IncomingReliableSequenceNumber, a, b)
 	})
@@ -86,5 +89,10 @@ func reliableDispatchAnchor(cmd *IncomingCommand) uint16 {
 		return cmd.ReliableSequenceNumber
 	}
 
-	return cmd.ReliableSequenceNumber + uint16(cmd.FragmentCount-1)
+	sum := uint32(cmd.ReliableSequenceNumber) + (cmd.FragmentCount - 1)
+	if sum > math.MaxUint16 {
+		sum %= 1 << 16
+	}
+
+	return uint16(sum)
 }
