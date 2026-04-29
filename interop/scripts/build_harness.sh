@@ -49,6 +49,16 @@ build_one() {
   local source="$interop_dir/cases/$name.c"
   local output="$bin_dir/$name"
   local cache_key_file="$interop_dir/build/$name.enet_root"
+  local cc_bin="${CC:-cc}"
+  local cflags=(
+    -std=c99
+    -D_DEFAULT_SOURCE
+    -D_POSIX_C_SOURCE=200112L
+    -D_DARWIN_C_SOURCE
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+  )
   local deps=(
     "$source"
     "$interop_dir/lib/harness.c"
@@ -67,7 +77,11 @@ build_one() {
     return
   fi
 
-  cc -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-typedef-redefinition \
+  if "$cc_bin" --version 2>/dev/null | grep -qi clang; then
+    cflags+=(-Wno-typedef-redefinition)
+  fi
+
+  "$cc_bin" "${cflags[@]}" \
     -I"$interop_dir/include" \
     -I"$enet_root/include" \
     "$interop_dir/lib/harness.c" \
