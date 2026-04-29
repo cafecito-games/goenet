@@ -1,7 +1,6 @@
 package interop_test
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,43 +88,28 @@ func TestBuildHarnessScriptReportsMissingENETSourceDir(t *testing.T) {
 	}
 }
 
-func TestBuildHarnessScriptUsesResolvedDefaultOutputPath(t *testing.T) {
-	fixture := newBuildHarnessScriptFixture(t)
+func TestBuildHarnessProducesScenarioBinary(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
 
-	explicitEnvFile := filepath.Join(t.TempDir(), "interop.env")
-	if err := os.WriteFile(explicitEnvFile, []byte("ENET_SOURCE_DIR=/tmp/from-env-file\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	fixture.run(t, explicitEnvFile)
-
-	got := fixture.readDelegateLog(t)
-	wantOutput := filepath.Join(fixture.interopDir, "bin", "enet-harness")
-	if got.outputPath != wantOutput {
-		t.Fatalf("delegate output path = %q, want %q", got.outputPath, wantOutput)
-	}
-	if got.enetSourceDir != "/tmp/from-env-file" {
-		t.Fatalf("delegate ENET_SOURCE_DIR = %q, want /tmp/from-env-file", got.enetSourceDir)
+	path, output := runBuildHarness(t, cfg, "go_server_reliable_exchange")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stat binary: %v\n%s", err, output)
 	}
 }
 
-func TestBuildHarnessScriptForwardsExplicitOutputPath(t *testing.T) {
-	fixture := newBuildHarnessScriptFixture(t)
+func TestBuildHarnessRejectsUnknownScenario(t *testing.T) {
+	cmd := exec.Command(filepath.Join(interopDirFromRuntime(), "scripts", "build_harness.sh"), "does_not_exist")
+	cmd.Env = append(baseScriptEnv(t),
+		"ENET_SOURCE_DIR=",
+		"GOENET_INTEROP_ENVFILE="+filepath.Join(t.TempDir(), "missing.env"),
+	)
 
-	explicitEnvFile := filepath.Join(t.TempDir(), "interop.env")
-	if err := os.WriteFile(explicitEnvFile, []byte("ENET_SOURCE_DIR=/tmp/from-env-file\n"), 0o644); err != nil {
-		t.Fatal(err)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected unknown scenario build to fail")
 	}
-
-	explicitOutput := filepath.Join(t.TempDir(), "custom-output")
-	fixture.run(t, explicitEnvFile, explicitOutput)
-
-	got := fixture.readDelegateLog(t)
-	if got.outputPath != explicitOutput {
-		t.Fatalf("delegate output path = %q, want %q", got.outputPath, explicitOutput)
-	}
-	if got.enetSourceDir != "/tmp/from-env-file" {
-		t.Fatalf("delegate ENET_SOURCE_DIR = %q, want /tmp/from-env-file", got.enetSourceDir)
+	if !strings.Contains(string(output), "interop: unknown scenario: does_not_exist") {
+		t.Fatalf("build_harness.sh output = %q", output)
 	}
 }
 
@@ -143,91 +127,27 @@ func baseScriptEnv(t *testing.T) []string {
 	return env
 }
 
-type buildHarnessScriptFixture struct {
-	interopDir string
-	logPath    string
-}
-
-type delegateLog struct {
-	enetSourceDir string
-	outputPath    string
-}
-
-func newBuildHarnessScriptFixture(t *testing.T) *buildHarnessScriptFixture {
+func mustLoadInteropConfigForTest(t *testing.T) interopConfig {
 	t.Helper()
 
-	rootDir := t.TempDir()
-	interopDir := filepath.Join(rootDir, "interop")
-	scriptsDir := filepath.Join(interopDir, "scripts")
-	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	copyScriptForTest(t, interopScriptPath("resolve_env.sh"), filepath.Join(scriptsDir, "resolve_env.sh"))
-	copyScriptForTest(t, interopScriptPath("build_harness.sh"), filepath.Join(scriptsDir, "build_harness.sh"))
-
-	logPath := filepath.Join(rootDir, "delegate.log")
-	delegate := fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
-printf 'ENET_SOURCE_DIR=%%s\n' "${ENET_SOURCE_DIR:-}" > %q
-printf 'OUTPUT=%%s\n' "$1" >> %q
-mkdir -p "$(dirname "$1")"
-: > "$1"
-`, logPath, logPath)
-	if err := os.WriteFile(filepath.Join(interopDir, "build_c_harness.sh"), []byte(delegate), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	return &buildHarnessScriptFixture{
-		interopDir: interopDir,
-		logPath:    logPath,
-	}
-}
-
-func copyScriptForTest(t *testing.T, srcPath, dstPath string) {
-	t.Helper()
-
-	content, err := os.ReadFile(srcPath)
+	cfg, err := loadInteropConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dstPath, content, 0o755); err != nil {
-		t.Fatal(err)
-	}
+
+	t.Setenv("ENET_SOURCE_DIR", cfg.ENETSourceDir)
+	return cfg
 }
 
-func (f *buildHarnessScriptFixture) run(t *testing.T, envFile string, args ...string) {
+func runBuildHarness(t *testing.T, cfg interopConfig, scenario string) (string, string) {
 	t.Helper()
 
-	cmd := exec.Command(filepath.Join(f.interopDir, "scripts", "build_harness.sh"), args...)
-	cmd.Env = append(baseScriptEnv(t), "GOENET_INTEROP_ENVFILE="+envFile)
+	cmd := exec.Command(filepath.Join(interopDirFromRuntime(), "scripts", "build_harness.sh"), scenario)
+	cmd.Env = append(baseScriptEnv(t), "ENET_SOURCE_DIR="+cfg.ENETSourceDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build_harness.sh failed: %v\n%s", err, output)
 	}
-}
 
-func (f *buildHarnessScriptFixture) readDelegateLog(t *testing.T) delegateLog {
-	t.Helper()
-
-	content, err := os.ReadFile(f.logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var got delegateLog
-	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "ENET_SOURCE_DIR":
-			got.enetSourceDir = value
-		case "OUTPUT":
-			got.outputPath = value
-		}
-	}
-
-	return got
+	return harnessBinaryPath(scenario), string(output)
 }

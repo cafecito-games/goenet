@@ -34,7 +34,7 @@ func TestGoServerTalksToCClient(t *testing.T) {
 		ChannelLimit: 1,
 	}, socket, 0)
 
-	client := startHarness(t, binary, "client",
+	client := startHarness(t, binary,
 		"--host", "127.0.0.1",
 		"--port", fmt.Sprintf("%d", socket.LocalAddr().Port()),
 		"--send", cClientMessage,
@@ -196,13 +196,16 @@ func (p *harnessProcess) Wait(t *testing.T, timeout time.Duration) string {
 func buildHarness(t *testing.T) string {
 	t.Helper()
 
-	script := filepath.Join(interopDir(t), "build_c_harness.sh")
+	cfg := mustLoadInteropConfigForTest(t)
+
+	script := filepath.Join(interopDir(t), "scripts", "build_harness.sh")
 	if _, err := os.Stat(script); err != nil {
 		t.Fatal(err)
 	}
 
-	output := filepath.Join(t.TempDir(), "enet-harness")
-	cmd := exec.Command(script, output)
+	output := filepath.Join(interopDir(t), "bin", "go_server_reliable_exchange")
+	cmd := exec.Command(script, "go_server_reliable_exchange")
+	cmd.Env = append(os.Environ(), "ENET_SOURCE_DIR="+cfg.ENETSourceDir)
 	result, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build harness: %v\n%s", err, result)
