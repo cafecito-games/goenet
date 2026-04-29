@@ -67,7 +67,7 @@ build_one() {
     return
   fi
 
-  cc -std=c99 -Wall -Wextra -Wno-unused-parameter \
+  cc -std=c99 -Wall -Wextra -Wno-unused-parameter -Wno-typedef-redefinition \
     -I"$interop_dir/include" \
     -I"$enet_root/include" \
     "$interop_dir/lib/harness.c" \

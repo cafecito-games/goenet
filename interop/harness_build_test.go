@@ -9,13 +9,17 @@ import (
 	"time"
 )
 
-func TestLoadInteropConfigRequiresENETSourceDir(t *testing.T) {
+func TestLoadInteropConfigDefaultsToVendoredENet(t *testing.T) {
 	t.Setenv("ENET_SOURCE_DIR", "")
 	t.Setenv("GOENET_INTEROP_ENVFILE", filepath.Join(t.TempDir(), "missing.env"))
 
-	_, err := loadInteropConfig()
-	if err == nil {
-		t.Fatal("expected missing ENET_SOURCE_DIR error")
+	cfg, err := loadInteropConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(interopDirFromRuntime(), "vendor")
+	if cfg.ENETSourceDir != want {
+		t.Fatalf("ENETSourceDir = %q, want %q", cfg.ENETSourceDir, want)
 	}
 }
 
@@ -73,7 +77,27 @@ func TestResolveInteropEnvScriptPrefersProcessEnv(t *testing.T) {
 	}
 }
 
-func TestBuildHarnessScriptReportsMissingENETSourceDir(t *testing.T) {
+func TestResolveInteropEnvScriptDefaultsToVendoredENet(t *testing.T) {
+	t.Setenv("ENET_SOURCE_DIR", "")
+	t.Setenv("GOENET_INTEROP_ENVFILE", filepath.Join(t.TempDir(), "missing.env"))
+
+	cmd := exec.Command(interopScriptPath("resolve_env.sh"))
+	cmd.Env = append(baseScriptEnv(t),
+		"ENET_SOURCE_DIR=",
+		"GOENET_INTEROP_ENVFILE="+filepath.Join(t.TempDir(), "missing.env"),
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve_env.sh failed: %v\n%s", err, output)
+	}
+	want := filepath.Join(interopDirFromRuntime(), "vendor")
+	if got := strings.TrimSpace(string(output)); got != want {
+		t.Fatalf("resolve_env.sh output = %q, want %q", got, want)
+	}
+}
+
+func TestBuildHarnessScriptUsesVendoredENetByDefault(t *testing.T) {
 	cmd := exec.Command(interopScriptPath("build_harness.sh"))
 	cmd.Env = append(baseScriptEnv(t),
 		"ENET_SOURCE_DIR=",
@@ -81,11 +105,8 @@ func TestBuildHarnessScriptReportsMissingENETSourceDir(t *testing.T) {
 	)
 
 	output, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatal("expected build_harness.sh to fail without ENET_SOURCE_DIR")
-	}
-	if !strings.Contains(string(output), "ENET_SOURCE_DIR must be set") {
-		t.Fatalf("build_harness.sh output = %q", output)
+	if err != nil {
+		t.Fatalf("build_harness.sh failed: %v\n%s", err, output)
 	}
 }
 

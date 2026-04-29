@@ -30,6 +30,7 @@ type interopConfig struct {
 }
 
 func loadInteropConfig() (interopConfig, error) {
+	defaultENETSourceDir := filepath.Join(interopDirFromRuntime(), "vendor")
 	envFile := strings.TrimSpace(os.Getenv("GOENET_INTEROP_ENVFILE"))
 	if envFile == "" {
 		envFile = filepath.Join(interopDirFromRuntime(), ".env")
@@ -65,7 +66,7 @@ func loadInteropConfig() (interopConfig, error) {
 		dir = fileValue
 	}
 	if dir == "" {
-		return interopConfig{}, fmt.Errorf("interop: ENET_SOURCE_DIR must be set in the environment or interop/.env")
+		dir = defaultENETSourceDir
 	}
 
 	return interopConfig{ENETSourceDir: dir}, nil
