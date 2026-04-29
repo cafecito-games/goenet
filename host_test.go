@@ -320,6 +320,46 @@ func TestPeerSendQueuesOutboundPayloadAndFlushes(t *testing.T) {
 	}
 }
 
+func TestPeerSendQueuesOutboundUnsequencedPayloadAndFlushes(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
+	baselineWrites := sock.WriteCount()
+
+	if err := peer.Send(0, &Packet{Data: []byte("ping"), Flags: PacketFlagUnsequenced}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sock.WriteCount(); got != baselineWrites {
+		t.Fatalf("writes before send flush = %d, want %d", got, baselineWrites)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := sock.MustWrite(t, baselineWrites)
+	header, command := mustSingleCommand(t, write.Payload)
+	if header.Flags != 0 {
+		t.Fatalf("header flags = 0x%04x, want 0x0000", header.Flags)
+	}
+
+	payload, ok := command.(protocol.SendUnsequenced)
+	if !ok {
+		t.Fatalf("payload command type = %T", command)
+	}
+	if payload.Header.ChannelID != 0 {
+		t.Fatalf("channel id = %d, want 0", payload.Header.ChannelID)
+	}
+	if payload.Header.Flags != protocol.CommandFlagUnsequenced {
+		t.Fatalf("payload flags = 0x%02x, want 0x%02x", payload.Header.Flags, protocol.CommandFlagUnsequenced)
+	}
+	if payload.UnsequencedGroup != 1 {
+		t.Fatalf("unsequenced group = %d, want 1", payload.UnsequencedGroup)
+	}
+	if string(payload.Data) != "ping" {
+		t.Fatalf("payload data = %q, want %q", payload.Data, "ping")
+	}
+}
+
 func TestDisconnectOnConnectedPeerQueuesAcknowledgedDisconnect(t *testing.T) {
 	host, sock := newTestHost()
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)

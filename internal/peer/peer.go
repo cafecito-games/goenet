@@ -5,6 +5,7 @@ import "github.com/cafecito-games/goenet/internal/core"
 // Peer carries the internal ENet-oriented state for a remote endpoint.
 type Peer struct {
 	OutgoingReliableSequenceNumber uint16
+	OutgoingUnsequencedGroup       uint16
 	OutgoingPeerID                 uint16
 	IncomingPeerID                 uint16
 	ConnectID                      uint32

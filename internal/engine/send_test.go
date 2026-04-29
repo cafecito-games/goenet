@@ -610,21 +610,18 @@ func TestFlushPreservesQueueStateWhenLaterQueuedCommandCannotFitWithinPeerMTU(t 
 	}
 }
 
-func TestSendRejectsUnsequencedPacketsForThisMilestone(t *testing.T) {
-	host, _ := newTestHost(t)
+func TestUnsequencedSendQueuesOutboundCommandAndFlushes(t *testing.T) {
+	host, sock := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
 	err := host.Send(peer.Raw, 0, &core.Packet{
 		Data:  []byte("abc"),
 		Flags: core.PacketFlagUnsequenced,
 	})
-	if err == nil {
-		t.Fatal("expected unsequenced error")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "unsequenced packets are not supported") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := peer.OutgoingCount(); got != 0 {
+	if got := peer.OutgoingCount(); got != 1 {
 		t.Fatalf("OutgoingCount = %d", got)
 	}
 	if got := peer.SentReliableCount(); got != 0 {
@@ -632,6 +629,54 @@ func TestSendRejectsUnsequencedPacketsForThisMilestone(t *testing.T) {
 	}
 	if got := peer.Raw.Channels[0].OutgoingUnreliableSequenceNumber; got != 0 {
 		t.Fatalf("channel unreliable sequence = %d", got)
+	}
+	if got := peer.Raw.OutgoingReliableSequenceNumber; got != 0 {
+		t.Fatalf("peer reliable sequence = %d", got)
+	}
+	if got := peer.Raw.OutgoingUnsequencedGroup; got != 1 {
+		t.Fatalf("peer unsequenced group = %d", got)
+	}
+
+	cmd := peer.mustOutgoing(t)
+	if cmd.Command.Header.Command != iprotocol.CommandSendUnsequenced {
+		t.Fatalf("command = %v", cmd.Command.Header.Command)
+	}
+	if cmd.Command.Header.Flags != iprotocol.CommandFlagUnsequenced {
+		t.Fatalf("flags = 0x%02x", cmd.Command.Header.Flags)
+	}
+	if cmd.ReliableSequenceNumber != 0 {
+		t.Fatalf("reliable sequence = %d", cmd.ReliableSequenceNumber)
+	}
+	if cmd.UnreliableSequenceNumber != 0 {
+		t.Fatalf("unreliable sequence = %d", cmd.UnreliableSequenceNumber)
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	write := sock.MustWrite(t, 0)
+	header, err := iprotocol.ParseHeader(write.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Flags != 0 {
+		t.Fatalf("header flags = 0x%04x", header.Flags)
+	}
+	if got := write.Payload[2]; iprotocol.Command(got&byte(iprotocol.CommandMask)) != iprotocol.CommandSendUnsequenced {
+		t.Fatalf("wire command = 0x%02x", got)
+	}
+	if got := write.Payload[2] &^ byte(iprotocol.CommandMask); got != byte(iprotocol.CommandFlagUnsequenced) {
+		t.Fatalf("wire command flags = 0x%02x", got)
+	}
+	if got := binary.BigEndian.Uint16(write.Payload[4:6]); got != 0 {
+		t.Fatalf("wire reliable sequence = %d", got)
+	}
+	if got := binary.BigEndian.Uint16(write.Payload[6:8]); got != 1 {
+		t.Fatalf("wire unsequenced group = %d", got)
+	}
+	if got := string(write.Payload[10:]); got != "abc" {
+		t.Fatalf("wire payload = %q", got)
 	}
 }
 
