@@ -62,3 +62,11 @@ func interopDirFromRuntime() string {
 	}
 	return filepath.Dir(file)
 }
+
+func harnessBinaryPath(name string) string {
+	return filepath.Join(interopDirFromRuntime(), "bin", name)
+}
+
+func interopScriptPath(name string) string {
+	return filepath.Join(interopDirFromRuntime(), "scripts", name)
+}
