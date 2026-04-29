@@ -384,12 +384,12 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 		Header: protocol.CommandHeader{
 			ChannelID: 0xFF,
 		},
-		OutgoingPeerID:             selected.IncomingPeerID,
-		IncomingSessionID:          incomingSessionID,
-		OutgoingSessionID:          outgoingSessionID,
-		MTU:                        selected.MTU,
-		WindowSize:                 verifyWindowSize,
-		ChannelCount:               channelCount,
+		OutgoingPeerID:    selected.IncomingPeerID,
+		IncomingSessionID: incomingSessionID,
+		OutgoingSessionID: outgoingSessionID,
+		MTU:               selected.MTU,
+		WindowSize:        verifyWindowSize,
+		ChannelCount:      channelCount,
 		// Advertise the host's actual bandwidth caps so the remote peer can do its
 		// half of the bandwidth/window negotiation (matches enet.h:1972-1973).
 		IncomingBandwidth:          h.incomingBandwidth,

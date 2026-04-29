@@ -257,9 +257,14 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 // nowMs returns wall-clock milliseconds elapsed since host construction, narrowed
 // to uint32. ENet's protocol fields, RTT math, and timeout windows all use uint32
 // ms with overflow-safe comparisons; anchoring on startTime keeps the value small
-// for the lifetime of the host while still tracking real elapsed time.
+// for the lifetime of the host while still tracking real elapsed time. After
+// ~49.7 days the counter wraps, which the timeutil overflow-safe helpers handle.
 func (h *Host) nowMs() uint32 {
-	return uint32(time.Since(h.startTime) / time.Millisecond)
+	elapsed := time.Since(h.startTime) / time.Millisecond
+	if elapsed < 0 {
+		return 0
+	}
+	return uint32(elapsed) //nolint:gosec // intentional uint32 wrap; ENet ms math is overflow-safe.
 }
 
 func cloneNetAddr(addr net.Addr) net.Addr {
@@ -345,4 +350,3 @@ func durationMillis(timeout time.Duration) uint32 {
 
 	return uint32(timeout / time.Millisecond)
 }
-

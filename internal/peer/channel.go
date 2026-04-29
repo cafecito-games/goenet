@@ -78,7 +78,8 @@ func incomingUnreliableLess(anchor uint16, a, b *IncomingCommand) bool {
 	// wrap. A naive `<` misorders pairs straddling 0xFFFF/0x0000. int16-cast
 	// difference gives the standard signed-wrap comparison and treats the
 	// shorter modular distance as "earlier".
-	return int16(a.UnreliableSequenceNumber-b.UnreliableSequenceNumber) < 0
+	diff := a.UnreliableSequenceNumber - b.UnreliableSequenceNumber
+	return int16(diff) < 0 //nolint:gosec // intentional signed-wrap compare for uint16 sequence numbers.
 }
 
 func sequenceDistance(anchor, sequence uint16) uint32 {
