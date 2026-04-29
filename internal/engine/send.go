@@ -17,6 +17,7 @@ const (
 	sendReliableCommandSize           = 6
 	sendUnreliableCommandSize         = 8
 	sendUnsequencedCommandSize        = 8
+	sendFragmentCommandSize           = 24
 )
 
 type outgoingSelection struct {
@@ -108,8 +109,11 @@ func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
 }
 
 func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.Packet) error {
-	if err := h.validatePacketSize(p, packet); err != nil {
+	if err := h.validatePacketSize(p, channelID, packet); err != nil {
 		return err
+	}
+	if shouldFragmentReliablePacket(p, packet, h.maxPacketDataLength(p, packet.Flags)) {
+		return h.queueOutgoingReliableFragments(p, channelID, packet)
 	}
 
 	command := &peer.OutgoingCommand{
@@ -155,6 +159,58 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 	}
 
 	return h.setupAndQueueOutgoingCommand(p, command)
+}
+
+func shouldFragmentReliablePacket(p *peer.Peer, packet *core.Packet, maxPacketDataLength int) bool {
+	return packet.Flags&core.PacketFlagReliable != 0 && len(packet.Data) > maxPacketDataLength
+}
+
+func (h *Host) queueOutgoingReliableFragments(p *peer.Peer, channelID uint8, packet *core.Packet) error {
+	fragmentLength := h.maxReliableFragmentDataLength(p)
+	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
+	startSequenceNumber := p.Channels[channelID].OutgoingReliableSequenceNumber + 1
+
+	for fragmentNumber := 0; fragmentNumber < fragmentCount; fragmentNumber++ {
+		offset := fragmentNumber * fragmentLength
+		end := offset + fragmentLength
+		if end > len(packet.Data) {
+			end = len(packet.Data)
+		}
+
+		command := &peer.OutgoingCommand{
+			FragmentOffset: uint32(offset),
+			FragmentLength: uint16(end - offset),
+			Packet:         packet,
+			Command: peer.Command{
+				Header: peer.Header{
+					Command:   protocol.CommandSendFragment,
+					ChannelID: channelID,
+					Flags:     protocol.CommandFlagAcknowledge,
+				},
+				Payload: &protocol.SendFragment{
+					StartSequenceNumber: startSequenceNumber,
+					FragmentCount:       uint32(fragmentCount),
+					FragmentNumber:      uint32(fragmentNumber),
+					TotalLength:         uint32(len(packet.Data)),
+					FragmentOffset:      uint32(offset),
+					Data:                append([]byte(nil), packet.Data[offset:end]...),
+				},
+			},
+		}
+		if err := h.setupAndQueueOutgoingCommand(p, command); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func fragmentCountForLength(totalLength, fragmentLength int) int {
+	if totalLength <= 0 || fragmentLength <= 0 {
+		return 0
+	}
+
+	return (totalLength + fragmentLength - 1) / fragmentLength
 }
 
 func (h *Host) queueOutgoingControlCommand(p *peer.Peer, command peer.Command) error {
@@ -439,15 +495,34 @@ func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
 	}
 }
 
-func (h *Host) validatePacketSize(p *peer.Peer, packet *core.Packet) error {
-	if len(packet.Data) > math.MaxUint16 {
+func (h *Host) validatePacketSize(p *peer.Peer, channelID uint8, packet *core.Packet) error {
+	if packet.Flags&core.PacketFlagReliable == 0 && len(packet.Data) > math.MaxUint16 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
 	}
-	if len(packet.Data) > h.maxPacketDataLength(p, packet.Flags) {
+	maxPacketDataLength := h.maxPacketDataLength(p, packet.Flags)
+	if len(packet.Data) <= maxPacketDataLength {
+		return nil
+	}
+	if packet.Flags&core.PacketFlagReliable == 0 {
 		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+	}
+	fragmentLength := h.maxReliableFragmentDataLength(p)
+	if fragmentLength <= 0 {
+		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+	}
+	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
+	if fragmentCount > int(protocolMaximumFragmentCount) {
+		return fmt.Errorf("engine: packet exceeds fragmentation limit: %d", len(packet.Data))
+	}
+	if fragmentCount > remainingReliableSequenceSpace(p, channelID) {
+		return fmt.Errorf("engine: reliable sequence space exhausted for fragmented send")
 	}
 
 	return nil
+}
+
+func remainingReliableSequenceSpace(p *peer.Peer, channelID uint8) int {
+	return int(math.MaxUint16 - p.Channels[channelID].OutgoingReliableSequenceNumber)
 }
 
 func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
@@ -462,6 +537,15 @@ func (h *Host) maxPacketDataLength(p *peer.Peer, flags core.PacketFlag) int {
 
 	overhead := headerOverhead(requiresSentTime, h.config.Checksum != nil) + commandSize
 	if p.MTU <= checkedUint32FromInt(overhead) {
+		return 0
+	}
+
+	return int(p.MTU) - overhead
+}
+
+func (h *Host) maxReliableFragmentDataLength(p *peer.Peer) int {
+	overhead := headerOverhead(true, h.config.Checksum != nil) + sendFragmentCommandSize
+	if p.MTU <= uint32(overhead) {
 		return 0
 	}
 

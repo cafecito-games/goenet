@@ -280,7 +280,83 @@ func TestFlushMovesAckCommandFromGeneralQueueInFlightWithWireMetadata(t *testing
 	}
 }
 
-func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
+func TestReliableSendQueuesFragmentsWhenPacketExceedsPeerMTU(t *testing.T) {
+	host, _ := newSizedTestHost(t, 60)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	packet := &core.Packet{
+		Data:  bytesOfLen(80, 'x'),
+		Flags: core.PacketFlagReliable,
+	}
+	if err := host.Send(peer.Raw, 0, packet); err != nil {
+		t.Fatal(err)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.SentReliableCount(); got != 3 {
+		t.Fatalf("SentReliableCount = %d", got)
+	}
+
+	reliableSequence := uint16(1)
+	offset := uint32(0)
+	for elem := peer.Raw.OutgoingSendReliableCommands.Front(); elem != nil; elem = elem.Next() {
+		cmd := elem.Value()
+		if cmd.Command.Header.Command != iprotocol.CommandSendFragment {
+			t.Fatalf("command = %v", cmd.Command.Header.Command)
+		}
+		payload, ok := cmd.Command.Payload.(*iprotocol.SendFragment)
+		if !ok {
+			t.Fatalf("payload type = %T", cmd.Command.Payload)
+		}
+		if cmd.ReliableSequenceNumber != reliableSequence {
+			t.Fatalf("reliable sequence = %d, want %d", cmd.ReliableSequenceNumber, reliableSequence)
+		}
+		if payload.StartSequenceNumber != 1 {
+			t.Fatalf("start sequence = %d", payload.StartSequenceNumber)
+		}
+		if payload.FragmentCount != 3 {
+			t.Fatalf("fragment count = %d", payload.FragmentCount)
+		}
+		if payload.FragmentNumber != uint32(reliableSequence-1) {
+			t.Fatalf("fragment number = %d", payload.FragmentNumber)
+		}
+		if payload.TotalLength != uint32(len(packet.Data)) {
+			t.Fatalf("total length = %d", payload.TotalLength)
+		}
+		if payload.FragmentOffset != offset {
+			t.Fatalf("fragment offset = %d, want %d", payload.FragmentOffset, offset)
+		}
+		offset += uint32(len(payload.Data))
+		reliableSequence++
+	}
+}
+
+func TestReliableSendRejectsFragmentationThatWouldWrapReliableSequenceSpace(t *testing.T) {
+	host, _ := newSizedTestHost(t, 60)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+	peer.Raw.Channels[0].OutgoingReliableSequenceNumber = math.MaxUint16 - 1
+
+	packet := &core.Packet{
+		Data:  bytesOfLen(80, 'x'),
+		Flags: core.PacketFlagReliable,
+	}
+	err := host.Send(peer.Raw, 0, packet)
+	if err == nil {
+		t.Fatal("expected reliable fragmentation sequence error")
+	}
+	if !strings.Contains(err.Error(), "reliable sequence space") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := peer.OutgoingCount(); got != 0 {
+		t.Fatalf("OutgoingCount = %d", got)
+	}
+	if got := peer.SentReliableCount(); got != 0 {
+		t.Fatalf("SentReliableCount = %d", got)
+	}
+}
+
+func TestUnreliableSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
@@ -302,7 +378,7 @@ func TestSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
 	}
 }
 
-func TestSendUsesPeerMTUForValidation(t *testing.T) {
+func TestUnreliableSendUsesPeerMTUForValidation(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 	peer.Raw.MTU = 20

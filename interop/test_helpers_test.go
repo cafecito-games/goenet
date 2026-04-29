@@ -197,15 +197,43 @@ func waitForEngineEventType(t *testing.T, host *engine.Host, want core.EventType
 func mustSendReliableEnginePacket(t *testing.T, host *engine.Host, peer *peer.Peer, payload string) {
 	t.Helper()
 
+	mustSendEnginePacketWithFlags(t, host, peer, payload, core.PacketFlagReliable)
+}
+
+func mustSendEnginePacketWithFlags(t *testing.T, host *engine.Host, peer *peer.Peer, payload string, flags core.PacketFlag) {
+	t.Helper()
+
 	if err := host.Send(peer, 0, &core.Packet{
 		Data:  []byte(payload),
-		Flags: core.PacketFlagReliable,
+		Flags: flags,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := host.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustReceiveEnginePacketWithFlags(t *testing.T, host *engine.Host, want string, flags core.PacketFlag) engine.Event {
+	t.Helper()
+
+	event := waitForEngineEventType(t, host, core.EventReceive)
+	if got := string(event.Packet.Data); got != want {
+		t.Fatalf("payload = %q, want %q", got, want)
+	}
+	if event.Packet.Flags != flags {
+		t.Fatalf("packet flags = %d, want %d", event.Packet.Flags, flags)
+	}
+
+	return event
+}
+
+func repeatedPayload(prefix string, size int) string {
+	if size <= len(prefix) {
+		return prefix
+	}
+
+	return prefix + strings.Repeat("x", size-len(prefix))
 }
 
 type scenarioReadyBuffer struct {
