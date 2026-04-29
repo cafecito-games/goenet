@@ -13,7 +13,7 @@ fi
 
 mkdir -p "$(dirname "$output")"
 
-cc -std=c99 -Wall -Wextra -Wno-unused-parameter -I"$enet_root/include" -x c - -o "$output" <<'EOF'
+cc -std=c99 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200112L -D_DARWIN_C_SOURCE -Wall -Wextra -Wno-unused-parameter -I"$enet_root/include" -x c - -o "$output" <<'EOF'
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
