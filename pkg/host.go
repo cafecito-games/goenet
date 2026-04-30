@@ -240,7 +240,7 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 	coreCfg := toCoreConfig(cfg)
 	normalized := fromCoreConfig(coreCfg)
 	// Preserve user-supplied hook references on the public Config snapshot —
-	// fromCoreConfig only round-trips primitive scalar fields.
+	// fromCoreConfig only round-trips the core-owned config fields.
 	normalized.Checksum = cfg.Checksum
 	normalized.Compressor = cfg.Compressor
 	normalized.Intercept = cfg.Intercept
