@@ -20,7 +20,23 @@ func TestNormalizeLoggerReturnsUsableLoggerWhenNil(t *testing.T) {
 		t.Fatal("normalizeLogger(nil) returned nil")
 	}
 
-	logger.Info("discarded")
+	if logger.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("normalizeLogger(nil) should return a disabled logger")
+	}
+	if logger.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("normalizeLogger(nil) should return a disabled logger")
+	}
+	if logger.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("normalizeLogger(nil) should return a disabled logger")
+	}
+}
+
+func TestComponentLoggerKeepsNilLoggerDisabled(t *testing.T) {
+	logger := ComponentLogger(nil, "host")
+
+	if logger.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("ComponentLogger(nil, ...) should remain disabled")
+	}
 }
 
 func TestComponentLoggerAddsComponentAttr(t *testing.T) {

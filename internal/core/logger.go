@@ -1,7 +1,6 @@
 package core
 
 import (
-	"io"
 	"log/slog"
 )
 
@@ -10,7 +9,7 @@ func normalizeLogger(logger *slog.Logger) *slog.Logger {
 		return logger
 	}
 
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 // ComponentLogger returns a child logger tagged with the given component name.

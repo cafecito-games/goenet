@@ -229,7 +229,7 @@ func (h *Host) Close() error {
 	}
 
 	if err := h.socket.Close(); err != nil {
-		h.logger.Error("host close failed", "error", err)
+		h.logger.Error("host close failed", "err", err)
 		return err
 	}
 

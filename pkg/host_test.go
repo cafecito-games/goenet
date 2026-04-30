@@ -165,7 +165,7 @@ func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
 	if !handler.Contains(func(r capturedRecord) bool {
 		return r.Message == "host close failed" &&
 			r.Attrs["component"] == "host" &&
-			errors.Is(attrError(r.Attrs["error"]), closeErr)
+			errors.Is(attrError(r.Attrs["err"]), closeErr)
 	}) {
 		t.Fatal("missing host close failed log")
 	}
