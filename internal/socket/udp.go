@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"syscall"
 	"time"
 
@@ -14,15 +15,23 @@ import (
 
 // UDP adapts a net.UDPConn to the engine's datagram socket interface.
 type UDP struct {
-	conn   *net.UDPConn
-	logger *slog.Logger
+	conn                *net.UDPConn
+	logger              *slog.Logger
+	setReadDeadline     func(time.Time) error
+	readFromUDPAddrPort func([]byte) (int, netip.AddrPort, error)
+	setWriteDeadline    func(time.Time) error
+	writeToUDP          func([]byte, *net.UDPAddr) (int, error)
 }
 
 // NewUDP wraps conn with the DatagramSocket interface.
 func NewUDP(conn *net.UDPConn, logger *slog.Logger) *UDP {
 	return &UDP{
-		conn:   conn,
-		logger: core.ComponentLogger(logger, "socket"),
+		conn:                conn,
+		logger:              core.ComponentLogger(logger, "socket"),
+		setReadDeadline:     conn.SetReadDeadline,
+		readFromUDPAddrPort: conn.ReadFromUDPAddrPort,
+		setWriteDeadline:    conn.SetWriteDeadline,
+		writeToUDP:          conn.WriteToUDP,
 	}
 }
 
@@ -33,12 +42,15 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 	}
 
 	for {
-		if err := s.conn.SetReadDeadline(nextPollDeadline(ctx)); err != nil {
+		if err := s.setReadDeadline(nextPollDeadline(ctx)); err != nil {
+			if shouldSuppressClosedConnError(err) {
+				return 0, core.Address{}, err
+			}
 			s.logger.Error("socket read deadline failed", "err", err)
 			return 0, core.Address{}, err
 		}
 
-		n, addr, err := s.conn.ReadFromUDPAddrPort(buf)
+		n, addr, err := s.readFromUDPAddrPort(buf)
 		if err == nil {
 			coreAddr, convErr := AddressFromAddrPort(addr)
 			if convErr != nil {
@@ -56,7 +68,11 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 		// ICMP "destination unreachable" on the next read. C ENet silently
 		// drops the error; matching that here keeps the read loop alive.
 		if errors.Is(err, syscall.ECONNREFUSED) {
+			s.logger.Debug("socket read ignored conn refused", "err", err)
 			continue
+		}
+		if shouldSuppressClosedConnError(err) {
+			return 0, core.Address{}, err
 		}
 		s.logger.Error("socket read failed", "err", err)
 		return 0, core.Address{}, err
@@ -70,12 +86,15 @@ func (s *UDP) WritePacket(ctx context.Context, addr core.Address, payload []byte
 	}
 
 	for {
-		if err := s.conn.SetWriteDeadline(nextPollDeadline(ctx)); err != nil {
+		if err := s.setWriteDeadline(nextPollDeadline(ctx)); err != nil {
+			if shouldSuppressClosedConnError(err) {
+				return 0, err
+			}
 			s.logger.Error("socket write deadline failed", "err", err)
 			return 0, err
 		}
 
-		n, err := s.conn.WriteToUDP(payload, UDPAddrFromAddress(addr))
+		n, err := s.writeToUDP(payload, UDPAddrFromAddress(addr))
 		if err == nil {
 			return n, nil
 		}
@@ -84,6 +103,9 @@ func (s *UDP) WritePacket(ctx context.Context, addr core.Address, payload []byte
 				return 0, ctxErr
 			}
 			continue
+		}
+		if shouldSuppressClosedConnError(err) {
+			return 0, err
 		}
 		s.logger.Error("socket write failed", "err", err)
 		return 0, err
@@ -106,4 +128,8 @@ func nextPollDeadline(ctx context.Context) time.Time {
 func isTimeoutError(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func shouldSuppressClosedConnError(err error) bool {
+	return errors.Is(err, net.ErrClosed)
 }

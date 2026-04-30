@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -69,22 +70,87 @@ func TestWritePacketReturnsContextCanceledWithoutDeadline(t *testing.T) {
 func TestWritePacketLogsSocketComponentOnWriteError(t *testing.T) {
 	handler := newCaptureHandler()
 	logger := slog.New(handler)
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
-	if err != nil {
-		t.Fatal(err)
+	wantErr := errors.New("write boom")
+	socket := &UDP{
+		logger: core.ComponentLogger(logger, "socket"),
+		setWriteDeadline: func(time.Time) error {
+			return nil
+		},
+		writeToUDP: func([]byte, *net.UDPAddr) (int, error) {
+			return 0, wantErr
+		},
 	}
-	_ = conn.Close()
 
-	socket := NewUDP(conn, logger)
-
-	_, err = socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
-	if err == nil {
-		t.Fatal("expected write error")
+	_, err := socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("WritePacket() error = %v, want %v", err, wantErr)
 	}
 	if !handler.Contains(func(r capturedRecord) bool {
-		return r.Attrs["component"] == "socket" && r.Attrs["err"] != nil
+		return r.Message == "socket write failed" &&
+			r.Level == slog.LevelError &&
+			r.Attrs["component"] == "socket" &&
+			errors.Is(attrError(r.Attrs["err"]), wantErr)
 	}) {
 		t.Fatal("missing socket error log")
+	}
+}
+
+func TestWritePacketSuppressesClosedConnErrorLog(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	socket := &UDP{
+		logger: core.ComponentLogger(logger, "socket"),
+		setWriteDeadline: func(time.Time) error {
+			return net.ErrClosed
+		},
+		writeToUDP: func([]byte, *net.UDPAddr) (int, error) {
+			t.Fatal("writeToUDP should not be called after closed-conn deadline error")
+			return 0, nil
+		},
+	}
+
+	_, err := socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("WritePacket() error = %v, want %v", err, net.ErrClosed)
+	}
+	if len(handler.snapshot()) != 0 {
+		t.Fatal("expected closed connection errors to be silent")
+	}
+}
+
+func TestReadPacketSuppressesConnRefusedWithDebugLog(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	readCalls := 0
+	socket := &UDP{
+		logger: core.ComponentLogger(logger, "socket"),
+		setReadDeadline: func(time.Time) error {
+			return nil
+		},
+		readFromUDPAddrPort: func([]byte) (int, netip.AddrPort, error) {
+			readCalls++
+			if readCalls == 1 {
+				return 0, netip.AddrPort{}, syscall.ECONNREFUSED
+			}
+			cancel()
+			return 0, netip.AddrPort{}, timeoutError{}
+		},
+	}
+
+	_, _, err := socket.ReadPacket(ctx, make([]byte, 32))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadPacket() error = %v, want %v", err, context.Canceled)
+	}
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "socket read ignored conn refused" &&
+			r.Level == slog.LevelDebug &&
+			r.Attrs["component"] == "socket" &&
+			errors.Is(attrError(r.Attrs["err"]), syscall.ECONNREFUSED)
+	}) {
+		t.Fatal("missing debug log for suppressed conn refused")
 	}
 }
 
@@ -132,7 +198,9 @@ func mustAddress(t *testing.T, raw string) core.Address {
 }
 
 type capturedRecord struct {
-	Attrs map[string]any
+	Message string
+	Level   slog.Level
+	Attrs   map[string]any
 }
 
 type captureHandler struct {
@@ -155,7 +223,11 @@ func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
 }
 
 func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
-	captured := capturedRecord{Attrs: make(map[string]any)}
+	captured := capturedRecord{
+		Message: record.Message,
+		Level:   record.Level,
+		Attrs:   make(map[string]any),
+	}
 	for _, attr := range h.attrs {
 		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
 	}
@@ -227,3 +299,14 @@ func (h *captureHandler) groupedKey(key string) string {
 	}
 	return full + "." + key
 }
+
+func attrError(value any) error {
+	err, _ := value.(error)
+	return err
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
