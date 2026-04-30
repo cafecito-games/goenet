@@ -3,6 +3,7 @@ package goenet
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -32,6 +33,7 @@ var ErrNilPeer = errors.New("goenet: nil peer")
 type Host struct {
 	mu        sync.Mutex
 	config    Config
+	logger    *slog.Logger
 	localAddr net.Addr
 	socket    isocket.DatagramSocket
 	engine    *engine.Host
@@ -226,6 +228,7 @@ func (h *Host) Close() error {
 		return nil
 	}
 
+	h.logger.Info("host closed")
 	return h.socket.Close()
 }
 
@@ -233,12 +236,14 @@ func newHost(cfg Config, conn *net.UDPConn) *Host {
 	sock := isocket.NewUDP(conn)
 	host := newHostWithSocket(cfg, sock)
 	host.localAddr = cloneNetAddr(conn.LocalAddr())
+	host.logger.Info("host started", "addr", host.localAddr)
 	return host
 }
 
 func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 	coreCfg := toCoreConfig(cfg)
 	normalized := fromCoreConfig(coreCfg)
+	hostLogger := core.ComponentLogger(coreCfg.Logger, "host")
 	// Preserve user-supplied hook references on the public Config snapshot —
 	// fromCoreConfig only round-trips the core-owned config fields.
 	normalized.Checksum = cfg.Checksum
@@ -248,6 +253,7 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 
 	return &Host{
 		config:    normalized,
+		logger:    hostLogger,
 		socket:    sock,
 		engine:    engine.NewHost(coreCfg, sock, 0),
 		peers:     make(map[*peer.Peer]*Peer),
