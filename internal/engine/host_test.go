@@ -54,8 +54,45 @@ func TestConnectLogsEngineComponent(t *testing.T) {
 	}
 }
 
+func TestFlushBudgetExhaustionLogsWarn(t *testing.T) {
+	handler := newCaptureHandler()
+	sock := testsupport.NewFakeSocket()
+	host := NewHost(core.Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       slog.New(handler),
+	}, sock, 77)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+
+	packetSize := host.maxPacketDataLength(raw, core.PacketFlagReliable)
+	for i := 0; i < maximumDatagramsPerPeerFlush+1; i++ {
+		if err := host.Send(raw, 0, &core.Packet{
+			Flags: core.PacketFlagReliable,
+			Data:  make([]byte, packetSize),
+		}); err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+	}
+
+	if err := host.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if sock.WriteCount() != maximumDatagramsPerPeerFlush {
+		t.Fatalf("WriteCount() = %d, want %d", sock.WriteCount(), maximumDatagramsPerPeerFlush)
+	}
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		_, hasRemainingPeers := r.Attrs["remaining_peers"]
+		return r.Message == "flush budget exhausted" && r.Level == slog.LevelWarn && !hasRemainingPeers
+	}) {
+		t.Fatal("missing flush budget warn log")
+	}
+}
+
 type capturedRecord struct {
 	Message string
+	Level   slog.Level
 	Attrs   map[string]any
 }
 
@@ -81,6 +118,7 @@ func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
 func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
 	captured := capturedRecord{
 		Message: record.Message,
+		Level:   record.Level,
 		Attrs:   make(map[string]any),
 	}
 	for _, attr := range h.attrs {

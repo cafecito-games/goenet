@@ -541,7 +541,7 @@ func (h *Host) checkTimeouts() (Event, bool) {
 					(attemptLimit >= p.TimeoutLimit &&
 						timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMinimum)) {
 				h.logger.Info(
-					"peer timeout reached",
+					"peer disconnect timeout",
 					"peer_id", p.IncomingPeerID,
 					"state", p.State,
 					"send_attempts", cmd.SendAttempts,
@@ -582,11 +582,6 @@ func (h *Host) checkTimeouts() (Event, bool) {
 }
 
 func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
-	h.logger.Info(
-		"peer disconnect timeout",
-		"peer_id", p.IncomingPeerID,
-		"state", p.State,
-	)
 	if p.State >= core.PeerStateConnectionPending {
 		h.recalculateBandwidthLimits = true
 	}
