@@ -16,7 +16,8 @@ type Config struct {
 	Checksum           Checksummer
 	Compressor         Compressor
 	Intercept          Interceptor
-	Logger             *slog.Logger
+	// Logger receives component-tagged records. If nil, all logging is suppressed.
+	Logger *slog.Logger
 }
 
 // DefaultConfig returns ENet-compatible host defaults.

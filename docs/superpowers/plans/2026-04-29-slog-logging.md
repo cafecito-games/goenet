@@ -1,6 +1,6 @@
 # slog Logging Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** add opt-in, component-tagged `slog` logging to `goenet` with a silent default, no repeated nil checks, and representative host/engine/socket coverage.
 
@@ -37,7 +37,7 @@
 - Modify: `pkg/host.go`
 - Test: `pkg/host_test.go`
 
-- [ ] **Step 1: Write the failing public config/logger tests**
+- [x] **Step 1: Write the failing public config/logger tests**
 
 Add focused tests that prove a configured logger is preserved and omitted logging stays non-panicking:
 
@@ -65,13 +65,13 @@ func TestDefaultConfigKeepsLoggerNilForCallers(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused public logger tests to verify they fail**
+- [x] **Step 2: Run the focused public logger tests to verify they fail**
 
 Run: `go test ./pkg -run 'TestConfigRoundTripsLogger|TestDefaultConfigKeepsLoggerNilForCallers'`
 
 Expected: FAIL with compile errors because `Config.Logger` does not exist yet.
 
-- [ ] **Step 3: Add logger fields and normalization plumbing**
+- [x] **Step 3: Add logger fields and normalization plumbing**
 
 Create a shared internal helper and wire logger fields through public and internal config:
 
@@ -168,13 +168,13 @@ normalized.Intercept = cfg.Intercept
 normalized.Logger = cfg.Logger
 ```
 
-- [ ] **Step 4: Run the focused public logger tests to verify they pass**
+- [x] **Step 4: Run the focused public logger tests to verify they pass**
 
 Run: `go test ./pkg -run 'TestConfigRoundTripsLogger|TestDefaultConfigKeepsLoggerNilForCallers'`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit the config plumbing**
+- [x] **Step 5: Commit the config plumbing**
 
 ```bash
 git add pkg/config.go pkg/host.go pkg/host_test.go internal/core/types.go internal/core/logger.go
@@ -188,7 +188,7 @@ git commit -m "feat: add slog config plumbing"
 - Modify: `pkg/host_test.go`
 - Test: `pkg/host_test.go`
 
-- [ ] **Step 1: Write the failing host logging tests**
+- [x] **Step 1: Write the failing host logging tests**
 
 Add a tiny capture handler in `pkg/host_test.go` and assert host-tagged logs appear for representative lifecycle events:
 
@@ -226,13 +226,13 @@ func TestListenLogsHostLifecycleWithComponentTag(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused host logging test to verify it fails**
+- [x] **Step 2: Run the focused host logging test to verify it fails**
 
 Run: `go test ./pkg -run TestListenLogsHostLifecycleWithComponentTag`
 
 Expected: FAIL because `pkg/host.go` does not emit any log records yet.
 
-- [ ] **Step 3: Add host logger storage and representative host logs**
+- [x] **Step 3: Add host logger storage and representative host logs**
 
 Update `pkg/host.go`:
 
@@ -278,13 +278,13 @@ func (h *Host) Close() error {
 
 Use the existing normalized logger from `coreCfg` so host code never checks for nil.
 
-- [ ] **Step 4: Run the focused host logging test to verify it passes**
+- [x] **Step 4: Run the focused host logging test to verify it passes**
 
 Run: `go test ./pkg -run TestListenLogsHostLifecycleWithComponentTag`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit the host logging layer**
+- [x] **Step 5: Commit the host logging layer**
 
 ```bash
 git add pkg/host.go pkg/host_test.go
@@ -300,7 +300,7 @@ git commit -m "feat: add host component slog logging"
 - Modify: `internal/engine/host_test.go`
 - Test: `internal/engine/host_test.go`
 
-- [ ] **Step 1: Write the failing engine logging tests**
+- [x] **Step 1: Write the failing engine logging tests**
 
 Add focused engine tests with a capture logger on `core.Config`:
 
@@ -337,13 +337,13 @@ func TestConnectLogsEngineComponent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused engine logging tests to verify they fail**
+- [x] **Step 2: Run the focused engine logging tests to verify they fail**
 
 Run: `go test ./internal/engine -run TestConnectLogsEngineComponent`
 
 Expected: FAIL because no engine log records are emitted yet.
 
-- [ ] **Step 3: Add engine logger storage and representative decision logs**
+- [x] **Step 3: Add engine logger storage and representative decision logs**
 
 Update `internal/engine/host.go`:
 
@@ -382,13 +382,13 @@ h.logger.Info("peer timed out", "peer_id", p.IncomingPeerID, "state", p.State)
 
 Prefer `Warn` or `Error` for anomalous decisions, `Info` for lifecycle/state transitions.
 
-- [ ] **Step 4: Run the focused engine logging tests to verify they pass**
+- [x] **Step 4: Run the focused engine logging tests to verify they pass**
 
 Run: `go test ./internal/engine -run TestConnectLogsEngineComponent`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit the engine logging layer**
+- [x] **Step 5: Commit the engine logging layer**
 
 ```bash
 git add internal/engine/host.go internal/engine/receive.go internal/engine/send.go internal/engine/host_test.go
@@ -405,7 +405,7 @@ git commit -m "feat: add engine component slog logging"
 - Test: `internal/socket/udp_test.go`
 - Test: `pkg/readme_test.go`
 
-- [ ] **Step 1: Write the failing socket and README tests**
+- [x] **Step 1: Write the failing socket and README tests**
 
 Add a socket logging test that asserts low-level failures are tagged:
 
@@ -442,7 +442,7 @@ required := []string{
 }
 ```
 
-- [ ] **Step 2: Run the focused socket and README tests to verify they fail**
+- [x] **Step 2: Run the focused socket and README tests to verify they fail**
 
 Run: `go test ./internal/socket -run TestWritePacketLogsSocketComponentOnWriteError`
 
@@ -450,7 +450,7 @@ Run: `go test ./pkg -run TestREADMETracksCurrentPublicAPI`
 
 Expected: FAIL because socket logging and README logger docs do not exist yet.
 
-- [ ] **Step 3: Add socket logger wiring and README logging example**
+- [x] **Step 3: Add socket logger wiring and README logging example**
 
 Update `internal/socket/udp.go` to accept/store a logger:
 
@@ -494,7 +494,7 @@ host, err := goenet.Listen("127.0.0.1:0", goenet.Config{
 
 And add one sentence: `If Logger is omitted, goenet remains silent.`
 
-- [ ] **Step 4: Run the focused socket and README tests to verify they pass**
+- [x] **Step 4: Run the focused socket and README tests to verify they pass**
 
 Run: `go test ./internal/socket -run TestWritePacketLogsSocketComponentOnWriteError`
 
@@ -502,7 +502,7 @@ Run: `go test ./pkg -run TestREADMETracksCurrentPublicAPI`
 
 Expected: PASS
 
-- [ ] **Step 5: Commit the socket/docs layer**
+- [x] **Step 5: Commit the socket/docs layer**
 
 ```bash
 git add internal/socket/udp.go internal/socket/udp_test.go README.md pkg/readme_test.go pkg/host.go
@@ -518,7 +518,7 @@ git commit -m "feat: add socket slog logging and docs"
 - Modify: `README.md`
 - Test: `./...`
 
-- [ ] **Step 1: Add any remaining focused regression assertions discovered during implementation**
+- [x] **Step 1: Add any remaining focused regression assertions discovered during implementation**
 
 Keep only narrow assertions that prove:
 
@@ -532,13 +532,13 @@ func TestDefaultConfigWithoutLoggerStillConnects(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the full suite**
+- [x] **Step 2: Run the full suite**
 
 Run: `go test ./...`
 
 Expected: PASS across `pkg`, `internal/engine`, `internal/socket`, and the existing interop suite.
 
-- [ ] **Step 3: Run repo checks that the pre-commit hooks expect**
+- [x] **Step 3: Run repo checks that the pre-commit hooks expect**
 
 Run: `task fmt:check`
 
@@ -548,7 +548,7 @@ Run: `task tidy:check`
 
 Expected: PASS
 
-- [ ] **Step 4: Commit the final verification adjustments**
+- [x] **Step 4: Commit the final verification adjustments**
 
 ```bash
 git add README.md pkg/host_test.go internal/engine/host_test.go internal/socket/udp_test.go

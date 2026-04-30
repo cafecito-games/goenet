@@ -83,10 +83,32 @@ func TestFlushBudgetExhaustionLogsWarn(t *testing.T) {
 	}
 
 	if !handler.Contains(func(r capturedRecord) bool {
-		_, hasRemainingPeers := r.Attrs["remaining_peers"]
-		return r.Message == "flush budget exhausted" && r.Level == slog.LevelWarn && !hasRemainingPeers
+		return r.Message == "flush budget exhausted" &&
+			r.Level == slog.LevelWarn &&
+			attrUint64(r.Attrs["peer_id"]) == uint64(raw.IncomingPeerID)
 	}) {
 		t.Fatal("missing flush budget warn log")
+	}
+}
+
+func TestNotifyConnectLogsReadablePeerStates(t *testing.T) {
+	handler := newCaptureHandler()
+	host := NewHost(core.Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       slog.New(handler),
+	}, testsupport.NewFakeSocket(), 77)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnecting)
+
+	host.notifyConnect(raw)
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "peer connect transition" &&
+			attrUint64(r.Attrs["peer_id"]) == uint64(raw.IncomingPeerID) &&
+			r.Attrs["from_state"] == "connecting" &&
+			r.Attrs["to_state"] == "connection_succeeded"
+	}) {
+		t.Fatal("missing readable peer connect transition log")
 	}
 }
 
@@ -191,4 +213,31 @@ func (h *captureHandler) groupedKey(key string) string {
 		return key
 	}
 	return full + "." + key
+}
+
+func attrUint64(value any) uint64 {
+	switch v := value.(type) {
+	case uint:
+		return uint64(v)
+	case uint8:
+		return uint64(v)
+	case uint16:
+		return uint64(v)
+	case uint32:
+		return uint64(v)
+	case uint64:
+		return v
+	case int:
+		return uint64(v)
+	case int8:
+		return uint64(v)
+	case int16:
+		return uint64(v)
+	case int32:
+		return uint64(v)
+	case int64:
+		return uint64(v)
+	default:
+		return 0
+	}
 }

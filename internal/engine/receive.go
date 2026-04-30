@@ -552,8 +552,8 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 	h.logger.Info(
 		"peer disconnect transition",
 		"peer_id", p.IncomingPeerID,
-		"from_state", previousState,
-		"to_state", p.State,
+		"from_state", previousState.String(),
+		"to_state", p.State.String(),
 	)
 
 	return inboundAccept
@@ -1051,8 +1051,8 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 	h.logger.Info(
 		"peer connect transition",
 		"peer_id", p.IncomingPeerID,
-		"from_state", previousState,
-		"to_state", p.State,
+		"from_state", previousState.String(),
+		"to_state", p.State.String(),
 	)
 	h.enqueuePeerDispatch(p)
 }
