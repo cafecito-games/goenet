@@ -228,8 +228,13 @@ func (h *Host) Close() error {
 		return nil
 	}
 
+	if err := h.socket.Close(); err != nil {
+		h.logger.Error("host close failed", "error", err)
+		return err
+	}
+
 	h.logger.Info("host closed")
-	return h.socket.Close()
+	return nil
 }
 
 func newHost(cfg Config, conn *net.UDPConn) *Host {

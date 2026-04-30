@@ -137,6 +137,40 @@ func TestCloseLogsHostLifecycleWithComponentTag(t *testing.T) {
 	}
 }
 
+func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	closeErr := errors.New("close failed")
+
+	host := newHostWithSocket(Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	}, &closeErrorSocket{
+		FakeSocket: testsupport.NewFakeSocket(),
+		err:        closeErr,
+	})
+
+	err := host.Close()
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", err, closeErr)
+	}
+
+	if handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host closed" && r.Attrs["component"] == "host"
+	}) {
+		t.Fatal("unexpected host closed log on close failure")
+	}
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host close failed" &&
+			r.Attrs["component"] == "host" &&
+			errors.Is(attrError(r.Attrs["error"]), closeErr)
+	}) {
+		t.Fatal("missing host close failed log")
+	}
+}
+
 func TestNewHostExposesBoundLocalAddr(t *testing.T) {
 	host, err := NewHost(Config{PeerCount: 1, ChannelLimit: 1})
 	if err != nil {
@@ -832,6 +866,7 @@ type capturedRecord struct {
 type captureHandler struct {
 	state *captureState
 	attrs []slog.Attr
+	group []string
 }
 
 type captureState struct {
@@ -841,6 +876,19 @@ type captureState struct {
 
 func newCaptureHandler() *captureHandler {
 	return &captureHandler{state: &captureState{}}
+}
+
+func TestCaptureHandlerWithGroupPrefixesAttrs(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler).WithGroup("host")
+
+	logger.Info("grouped", "status", "ok")
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "grouped" && r.Attrs["host.status"] == "ok"
+	}) {
+		t.Fatal("missing grouped attr")
+	}
 }
 
 func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
@@ -853,10 +901,10 @@ func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
 		Attrs:   make(map[string]any),
 	}
 	for _, attr := range h.attrs {
-		captured.Attrs[attr.Key] = attr.Value.Any()
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
 	}
 	record.Attrs(func(attr slog.Attr) bool {
-		captured.Attrs[attr.Key] = attr.Value.Any()
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
 		return true
 	})
 
@@ -870,14 +918,19 @@ func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	child := &captureHandler{
 		state: h.state,
 		attrs: make([]slog.Attr, 0, len(h.attrs)+len(attrs)),
+		group: append([]string(nil), h.group...),
 	}
 	child.attrs = append(child.attrs, h.attrs...)
 	child.attrs = append(child.attrs, attrs...)
 	return child
 }
 
-func (h *captureHandler) WithGroup(string) slog.Handler {
-	return h
+func (h *captureHandler) WithGroup(name string) slog.Handler {
+	return &captureHandler{
+		state: h.state,
+		attrs: append([]slog.Attr(nil), h.attrs...),
+		group: append(append([]string(nil), h.group...), name),
+	}
 }
 
 func (h *captureHandler) Contains(match func(capturedRecord) bool) bool {
@@ -896,6 +949,41 @@ func (h *captureHandler) snapshot() []capturedRecord {
 	records := make([]capturedRecord, len(h.state.records))
 	copy(records, h.state.records)
 	return records
+}
+
+func (h *captureHandler) groupedKey(key string) string {
+	if len(h.group) == 0 {
+		return key
+	}
+
+	full := ""
+	for _, group := range h.group {
+		if group == "" {
+			continue
+		}
+		if full != "" {
+			full += "."
+		}
+		full += group
+	}
+	if full == "" {
+		return key
+	}
+	return full + "." + key
+}
+
+type closeErrorSocket struct {
+	*testsupport.FakeSocket
+	err error
+}
+
+func (s *closeErrorSocket) Close() error {
+	return s.err
+}
+
+func attrError(v any) error {
+	err, _ := v.(error)
+	return err
 }
 
 type disconnectNowPeer interface {
