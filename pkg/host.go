@@ -244,6 +244,7 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 	normalized.Checksum = cfg.Checksum
 	normalized.Compressor = cfg.Compressor
 	normalized.Intercept = cfg.Intercept
+	normalized.Logger = cfg.Logger
 
 	return &Host{
 		config:    normalized,

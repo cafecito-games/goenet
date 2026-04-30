@@ -1,7 +1,10 @@
 // Package core holds shared internal transport-facing value types.
 package core
 
-import "net/netip"
+import (
+	"log/slog"
+	"net/netip"
+)
 
 const (
 	defaultMTU                uint32 = 1392
@@ -120,6 +123,7 @@ type Config struct {
 	Checksum           Checksummer
 	Compressor         Compressor
 	Intercept          Interceptor
+	Logger             *slog.Logger
 }
 
 // DefaultConfig returns ENet-compatible host defaults suitable for a single-peer client.

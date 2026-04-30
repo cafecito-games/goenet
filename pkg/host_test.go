@@ -3,6 +3,8 @@ package goenet
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"testing"
@@ -64,6 +66,28 @@ func TestNewHostReturnsClientCapableHost(t *testing.T) {
 
 	if host.Config().ChannelLimit != 1 {
 		t.Fatalf("channel limit = %d, want 1", host.Config().ChannelLimit)
+	}
+}
+
+func TestConfigRoundTripsLogger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	host, sock := newConfiguredTestHost(Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	})
+	_ = sock
+
+	if got := host.Config().Logger; got != logger {
+		t.Fatalf("Config().Logger = %p, want %p", got, logger)
+	}
+}
+
+func TestDefaultConfigKeepsLoggerNilForCallers(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Logger != nil {
+		t.Fatal("DefaultConfig().Logger should be nil for callers")
 	}
 }
 
