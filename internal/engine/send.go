@@ -253,6 +253,7 @@ func (h *Host) Flush(ctx context.Context) error {
 
 		for {
 			if writeBudget == 0 {
+				h.logger.Debug("flush budget exhausted", "remaining_peers", len(h.peers))
 				return nil
 			}
 			datagram, wroteAny, err := h.preparePeerDatagram(p)

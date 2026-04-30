@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"math"
 
 	"github.com/cafecito-games/goenet/internal/core"
@@ -32,6 +33,7 @@ const (
 // Host carries the minimal outbound engine state for queueing and flush tests.
 type Host struct {
 	config                     core.Config
+	logger                     *slog.Logger
 	socket                     socket.DatagramSocket
 	peers                      []*peer.Peer
 	serviceTime                uint32
@@ -67,6 +69,9 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 	if config.MaximumWaitingData != 0 {
 		cfg.MaximumWaitingData = config.MaximumWaitingData
 	}
+	if config.Logger != nil {
+		cfg.Logger = config.Logger
+	}
 	if config.Checksum != nil {
 		cfg.Checksum = config.Checksum
 	}
@@ -82,6 +87,7 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 
 	host := &Host{
 		config:        cfg,
+		logger:        core.ComponentLogger(cfg.Logger, "engine"),
 		socket:        sock,
 		serviceTime:   serviceTime,
 		dispatchSet:   make(map[*peer.Peer]struct{}),
@@ -324,6 +330,14 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 		return nil, err
 	}
 
+	h.logger.Info(
+		"peer connect queued",
+		"peer_id", p.IncomingPeerID,
+		"addr", addr.AddrPort(),
+		"channel_count", requestedChannels,
+		"connect_id", p.ConnectID,
+	)
+
 	return p, nil
 }
 
@@ -526,6 +540,13 @@ func (h *Host) checkTimeouts() (Event, bool) {
 				(timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMaximum ||
 					(attemptLimit >= p.TimeoutLimit &&
 						timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMinimum)) {
+				h.logger.Info(
+					"peer timeout reached",
+					"peer_id", p.IncomingPeerID,
+					"state", p.State,
+					"send_attempts", cmd.SendAttempts,
+					"timeout_limit", p.TimeoutLimit,
+				)
 				return h.notifyDisconnectTimeout(p)
 			}
 
@@ -535,6 +556,13 @@ func (h *Host) checkTimeouts() (Event, bool) {
 
 			p.UnindexSentReliableCommand(cmd)
 			p.SentReliableCommands.Remove(elem)
+			h.logger.Debug(
+				"requeue timed out command",
+				"peer_id", p.IncomingPeerID,
+				"command", cmd.Command.Header.Command,
+				"send_attempts", cmd.SendAttempts,
+				"reliable_sequence_number", cmd.ReliableSequenceNumber,
+			)
 			if cmd.Packet != nil {
 				if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
 					p.ReliableDataInTransit = 0
@@ -554,6 +582,11 @@ func (h *Host) checkTimeouts() (Event, bool) {
 }
 
 func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
+	h.logger.Info(
+		"peer disconnect timeout",
+		"peer_id", p.IncomingPeerID,
+		"state", p.State,
+	)
 	if p.State >= core.PeerStateConnectionPending {
 		h.recalculateBandwidthLimits = true
 	}
@@ -630,6 +663,12 @@ func (h *Host) bandwidthThrottle() error {
 			if p.PacketThrottle > p.PacketThrottleLimit {
 				p.PacketThrottle = p.PacketThrottleLimit
 			}
+			h.logger.Debug(
+				"peer throttle limited",
+				"peer_id", p.IncomingPeerID,
+				"packet_throttle_limit", p.PacketThrottleLimit,
+				"incoming_bandwidth", p.IncomingBandwidth,
+			)
 
 			p.OutgoingBandwidthThrottleEpoch = h.serviceTime
 			p.IncomingDataTotal = 0

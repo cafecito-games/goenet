@@ -421,6 +421,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 
 	runtime := h.runtime[p]
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
+		h.logger.Info("peer verify connect rejected", "peer_id", p.IncomingPeerID, "reason", "channel_count")
 		p.State = core.PeerStateZombie
 		h.enqueuePeerDispatch(p)
 		return inboundReject
@@ -429,6 +430,7 @@ func (h *Host) handleVerifyConnect(p *peer.Peer, command protocol.VerifyConnect)
 		command.PacketThrottleAcceleration != p.PacketThrottleAcceleration ||
 		command.PacketThrottleDeceleration != p.PacketThrottleDeceleration ||
 		command.ConnectID != p.ConnectID {
+		h.logger.Info("peer verify connect rejected", "peer_id", p.IncomingPeerID, "reason", "parameter_mismatch")
 		p.State = core.PeerStateZombie
 		h.enqueuePeerDispatch(p)
 		return inboundReject
@@ -528,6 +530,7 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 	}
 
 	h.clearPeerQueues(p)
+	previousState := p.State
 
 	switch p.State {
 	case core.PeerStateConnectionSucceeded, core.PeerStateDisconnecting, core.PeerStateConnecting:
@@ -545,6 +548,13 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 	default:
 		h.resetPeer(p)
 	}
+
+	h.logger.Info(
+		"peer disconnect transition",
+		"peer_id", p.IncomingPeerID,
+		"from_state", previousState,
+		"to_state", p.State,
+	)
 
 	return inboundAccept
 }
@@ -1032,11 +1042,18 @@ func (h *Host) removePeerDispatch(p *peer.Peer) {
 }
 
 func (h *Host) notifyConnect(p *peer.Peer) {
+	previousState := p.State
 	if p.State == core.PeerStateConnecting {
 		p.State = core.PeerStateConnectionSucceeded
 	} else {
 		p.State = core.PeerStateConnectionPending
 	}
+	h.logger.Info(
+		"peer connect transition",
+		"peer_id", p.IncomingPeerID,
+		"from_state", previousState,
+		"to_state", p.State,
+	)
 	h.enqueuePeerDispatch(p)
 }
 
