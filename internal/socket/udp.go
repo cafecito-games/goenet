@@ -4,6 +4,7 @@ package socket
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"syscall"
 	"time"
@@ -13,12 +14,16 @@ import (
 
 // UDP adapts a net.UDPConn to the engine's datagram socket interface.
 type UDP struct {
-	conn *net.UDPConn
+	conn   *net.UDPConn
+	logger *slog.Logger
 }
 
 // NewUDP wraps conn with the DatagramSocket interface.
-func NewUDP(conn *net.UDPConn) *UDP {
-	return &UDP{conn: conn}
+func NewUDP(conn *net.UDPConn, logger *slog.Logger) *UDP {
+	return &UDP{
+		conn:   conn,
+		logger: core.ComponentLogger(logger, "socket"),
+	}
 }
 
 // ReadPacket reads one datagram into buf and returns its source address.
@@ -29,6 +34,7 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 
 	for {
 		if err := s.conn.SetReadDeadline(nextPollDeadline(ctx)); err != nil {
+			s.logger.Error("socket read deadline failed", "err", err)
 			return 0, core.Address{}, err
 		}
 
@@ -52,6 +58,7 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			continue
 		}
+		s.logger.Error("socket read failed", "err", err)
 		return 0, core.Address{}, err
 	}
 }
@@ -64,6 +71,7 @@ func (s *UDP) WritePacket(ctx context.Context, addr core.Address, payload []byte
 
 	for {
 		if err := s.conn.SetWriteDeadline(nextPollDeadline(ctx)); err != nil {
+			s.logger.Error("socket write deadline failed", "err", err)
 			return 0, err
 		}
 
@@ -77,6 +85,7 @@ func (s *UDP) WritePacket(ctx context.Context, addr core.Address, payload []byte
 			}
 			continue
 		}
+		s.logger.Error("socket write failed", "err", err)
 		return 0, err
 	}
 }

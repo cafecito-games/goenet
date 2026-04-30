@@ -30,6 +30,9 @@ func TestREADMETracksCurrentPublicAPI(t *testing.T) {
 		"Peer.Send",
 		"DisconnectLater",
 		"Reset",
+		"Logger",
+		"slog.Default()",
+		"omitting Logger keeps the library silent",
 	}
 	for _, needle := range required {
 		if !strings.Contains(readme, needle) {

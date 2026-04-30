@@ -3,8 +3,10 @@ package socket
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +22,7 @@ func TestReadPacketReturnsContextCanceledWithoutDeadline(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	sock := NewUDP(conn)
+	sock := NewUDP(conn, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -49,7 +51,7 @@ func TestWritePacketReturnsContextCanceledWithoutDeadline(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	sock := NewUDP(conn)
+	sock := NewUDP(conn, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -61,6 +63,28 @@ func TestWritePacketReturnsContextCanceledWithoutDeadline(t *testing.T) {
 	_, err = sock.WritePacket(ctx, addr, []byte("payload"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("WritePacket() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestWritePacketLogsSocketComponentOnWriteError(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+
+	socket := NewUDP(conn, logger)
+
+	_, err = socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Attrs["component"] == "socket" && r.Attrs["err"] != nil
+	}) {
+		t.Fatal("missing socket error log")
 	}
 }
 
@@ -94,4 +118,112 @@ func TestUDPAddrFromAddressRestoresNumericIPv6ScopeID(t *testing.T) {
 	if udpAddr.Zone == "" {
 		t.Fatal("UDPAddrFromAddress().Zone = empty, want populated scope zone")
 	}
+}
+
+func mustAddress(t *testing.T, raw string) core.Address {
+	t.Helper()
+
+	addr, err := core.NewAddress(netip.MustParseAddrPort(raw), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return addr
+}
+
+type capturedRecord struct {
+	Attrs map[string]any
+}
+
+type captureHandler struct {
+	state *captureState
+	attrs []slog.Attr
+	group []string
+}
+
+type captureState struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+func newCaptureHandler() *captureHandler {
+	return &captureHandler{state: &captureState{}}
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
+	captured := capturedRecord{Attrs: make(map[string]any)}
+	for _, attr := range h.attrs {
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
+		return true
+	})
+
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+	h.state.records = append(h.state.records, captured)
+	return nil
+}
+
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	child := &captureHandler{
+		state: h.state,
+		attrs: make([]slog.Attr, 0, len(h.attrs)+len(attrs)),
+		group: append([]string(nil), h.group...),
+	}
+	child.attrs = append(child.attrs, h.attrs...)
+	child.attrs = append(child.attrs, attrs...)
+	return child
+}
+
+func (h *captureHandler) WithGroup(name string) slog.Handler {
+	return &captureHandler{
+		state: h.state,
+		attrs: append([]slog.Attr(nil), h.attrs...),
+		group: append(append([]string(nil), h.group...), name),
+	}
+}
+
+func (h *captureHandler) Contains(match func(capturedRecord) bool) bool {
+	for _, record := range h.snapshot() {
+		if match(record) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *captureHandler) snapshot() []capturedRecord {
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+
+	records := make([]capturedRecord, len(h.state.records))
+	copy(records, h.state.records)
+	return records
+}
+
+func (h *captureHandler) groupedKey(key string) string {
+	if len(h.group) == 0 {
+		return key
+	}
+
+	full := ""
+	for _, group := range h.group {
+		if group == "" {
+			continue
+		}
+		if full != "" {
+			full += "."
+		}
+		full += group
+	}
+	if full == "" {
+		return key
+	}
+	return full + "." + key
 }

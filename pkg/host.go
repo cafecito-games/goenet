@@ -238,7 +238,7 @@ func (h *Host) Close() error {
 }
 
 func newHost(cfg Config, conn *net.UDPConn) *Host {
-	sock := isocket.NewUDP(conn)
+	sock := isocket.NewUDP(conn, cfg.Logger)
 	host := newHostWithSocket(cfg, sock)
 	host.localAddr = cloneNetAddr(conn.LocalAddr())
 	host.logger.Info("host started", "addr", host.localAddr)
