@@ -24,6 +24,8 @@ Import the public API from:
 import goenet "github.com/cafecito-games/goenet/pkg"
 ```
 
+Optional logging uses the standard library's `log/slog`; omitting Logger keeps the library silent.
+
 ## Public API
 
 Host construction:
@@ -141,6 +143,22 @@ for {
 	case goenet.EventNone:
 	}
 }
+```
+
+Logging:
+
+```go
+logger := slog.Default()
+
+host, err := goenet.Listen("127.0.0.1:0", goenet.Config{
+	PeerCount:    4,
+	ChannelLimit: 1,
+	Logger:       logger,
+})
+if err != nil {
+	return err
+}
+defer host.Close()
 ```
 
 ## Event And Packet Semantics

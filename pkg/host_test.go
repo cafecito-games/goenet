@@ -3,8 +3,11 @@ package goenet
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +67,107 @@ func TestNewHostReturnsClientCapableHost(t *testing.T) {
 
 	if host.Config().ChannelLimit != 1 {
 		t.Fatalf("channel limit = %d, want 1", host.Config().ChannelLimit)
+	}
+}
+
+func TestConfigRoundTripsLogger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	host, sock := newConfiguredTestHost(Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	})
+	_ = sock
+
+	if got := host.Config().Logger; got != logger {
+		t.Fatalf("Config().Logger = %p, want %p", got, logger)
+	}
+}
+
+func TestDefaultConfigKeepsLoggerNilForCallers(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Logger != nil {
+		t.Fatal("DefaultConfig().Logger should be nil for callers")
+	}
+}
+
+func TestListenLogsHostLifecycleWithComponentTag(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host started" && r.Attrs["component"] == "host"
+	}) {
+		t.Fatal("missing host started log")
+	}
+}
+
+func TestCloseLogsHostLifecycleWithComponentTag(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := host.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host closed" && r.Attrs["component"] == "host"
+	}) {
+		t.Fatal("missing host closed log")
+	}
+}
+
+func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	closeErr := errors.New("close failed")
+
+	host := newHostWithSocket(Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Logger:       logger,
+	}, &closeErrorSocket{
+		FakeSocket: testsupport.NewFakeSocket(),
+		err:        closeErr,
+	})
+
+	err := host.Close()
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("Close() error = %v, want %v", err, closeErr)
+	}
+
+	if handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host closed" && r.Attrs["component"] == "host"
+	}) {
+		t.Fatal("unexpected host closed log on close failure")
+	}
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host close failed" &&
+			r.Attrs["component"] == "host" &&
+			errors.Is(attrError(r.Attrs["err"]), closeErr)
+	}) {
+		t.Fatal("missing host close failed log")
 	}
 }
 
@@ -752,6 +856,134 @@ func newTestHost() (*Host, *testsupport.FakeSocket) {
 func newConfiguredTestHost(cfg Config) (*Host, *testsupport.FakeSocket) {
 	sock := testsupport.NewFakeSocket()
 	return newHostWithSocket(cfg, sock), sock
+}
+
+type capturedRecord struct {
+	Message string
+	Attrs   map[string]any
+}
+
+type captureHandler struct {
+	state *captureState
+	attrs []slog.Attr
+	group []string
+}
+
+type captureState struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+func newCaptureHandler() *captureHandler {
+	return &captureHandler{state: &captureState{}}
+}
+
+func TestCaptureHandlerWithGroupPrefixesAttrs(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler).WithGroup("host")
+
+	logger.Info("grouped", "status", "ok")
+
+	if !handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "grouped" && r.Attrs["host.status"] == "ok"
+	}) {
+		t.Fatal("missing grouped attr")
+	}
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
+	captured := capturedRecord{
+		Message: record.Message,
+		Attrs:   make(map[string]any),
+	}
+	for _, attr := range h.attrs {
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		captured.Attrs[h.groupedKey(attr.Key)] = attr.Value.Any()
+		return true
+	})
+
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+	h.state.records = append(h.state.records, captured)
+	return nil
+}
+
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	child := &captureHandler{
+		state: h.state,
+		attrs: make([]slog.Attr, 0, len(h.attrs)+len(attrs)),
+		group: append([]string(nil), h.group...),
+	}
+	child.attrs = append(child.attrs, h.attrs...)
+	child.attrs = append(child.attrs, attrs...)
+	return child
+}
+
+func (h *captureHandler) WithGroup(name string) slog.Handler {
+	return &captureHandler{
+		state: h.state,
+		attrs: append([]slog.Attr(nil), h.attrs...),
+		group: append(append([]string(nil), h.group...), name),
+	}
+}
+
+func (h *captureHandler) Contains(match func(capturedRecord) bool) bool {
+	for _, record := range h.snapshot() {
+		if match(record) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *captureHandler) snapshot() []capturedRecord {
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+
+	records := make([]capturedRecord, len(h.state.records))
+	copy(records, h.state.records)
+	return records
+}
+
+func (h *captureHandler) groupedKey(key string) string {
+	if len(h.group) == 0 {
+		return key
+	}
+
+	full := ""
+	for _, group := range h.group {
+		if group == "" {
+			continue
+		}
+		if full != "" {
+			full += "."
+		}
+		full += group
+	}
+	if full == "" {
+		return key
+	}
+	return full + "." + key
+}
+
+type closeErrorSocket struct {
+	*testsupport.FakeSocket
+	err error
+}
+
+func (s *closeErrorSocket) Close() error {
+	return s.err
+}
+
+func attrError(v any) error {
+	err, _ := v.(error)
+	return err
 }
 
 type disconnectNowPeer interface {

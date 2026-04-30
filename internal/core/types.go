@@ -1,7 +1,10 @@
 // Package core holds shared internal transport-facing value types.
 package core
 
-import "net/netip"
+import (
+	"log/slog"
+	"net/netip"
+)
 
 const (
 	defaultMTU                uint32 = 1392
@@ -68,6 +71,34 @@ const (
 	PeerStateZombie
 )
 
+// String returns the symbolic ENet peer state name.
+func (s PeerState) String() string {
+	switch s {
+	case PeerStateDisconnected:
+		return "disconnected"
+	case PeerStateConnecting:
+		return "connecting"
+	case PeerStateAcknowledgingConnect:
+		return "acknowledging_connect"
+	case PeerStateConnectionPending:
+		return "connection_pending"
+	case PeerStateConnectionSucceeded:
+		return "connection_succeeded"
+	case PeerStateConnected:
+		return "connected"
+	case PeerStateDisconnectLater:
+		return "disconnect_later"
+	case PeerStateDisconnecting:
+		return "disconnecting"
+	case PeerStateAcknowledgingDisconnect:
+		return "acknowledging_disconnect"
+	case PeerStateZombie:
+		return "zombie"
+	default:
+		return "unknown"
+	}
+}
+
 // Checksummer computes a checksum across the provided buffer slices, treated as a
 // single concatenated byte sequence.
 type Checksummer interface {
@@ -120,6 +151,8 @@ type Config struct {
 	Checksum           Checksummer
 	Compressor         Compressor
 	Intercept          Interceptor
+	// Logger receives component-tagged records. If nil, all logging is suppressed.
+	Logger *slog.Logger
 }
 
 // DefaultConfig returns ENet-compatible host defaults suitable for a single-peer client.

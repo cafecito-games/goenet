@@ -1,6 +1,10 @@
 package goenet
 
-import "github.com/cafecito-games/goenet/internal/core"
+import (
+	"log/slog"
+
+	"github.com/cafecito-games/goenet/internal/core"
+)
 
 // Config configures host construction and ENet compatibility limits.
 type Config struct {
@@ -12,6 +16,8 @@ type Config struct {
 	Checksum           Checksummer
 	Compressor         Compressor
 	Intercept          Interceptor
+	// Logger receives component-tagged records. If nil, all logging is suppressed.
+	Logger *slog.Logger
 }
 
 // DefaultConfig returns ENet-compatible host defaults.
@@ -45,6 +51,9 @@ func toCoreConfig(cfg Config) core.Config {
 	if cfg.Intercept != nil {
 		coreCfg.Intercept = interceptorAdapter{inner: cfg.Intercept}
 	}
+	if cfg.Logger != nil {
+		coreCfg.Logger = cfg.Logger
+	}
 
 	return coreCfg
 }
@@ -56,5 +65,6 @@ func fromCoreConfig(cfg core.Config) Config {
 		MTU:                cfg.MTU,
 		MaximumPacketSize:  cfg.MaximumPacketSize,
 		MaximumWaitingData: cfg.MaximumWaitingData,
+		Logger:             cfg.Logger,
 	}
 }
