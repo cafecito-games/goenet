@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"net/netip"
 	"strings"
@@ -386,8 +387,8 @@ func TestUnreliableSendRejectsUnsequencedPacketAboveMTU(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected oversize unsequenced error")
 	}
-	if !strings.Contains(err.Error(), "unsequenced packet exceeds no-fragmentation limit") {
-		t.Fatalf("error = %v", err)
+	if !errors.Is(err, ErrNoFragmentation) {
+		t.Fatalf("error = %v, want ErrNoFragmentation", err)
 	}
 }
 
@@ -402,8 +403,8 @@ func TestUnreliableSendRejectsTinyMTUTooSmallToFragment(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected fragmentation MTU error")
 	}
-	if !strings.Contains(err.Error(), "too small to fragment") {
-		t.Fatalf("error = %v", err)
+	if !errors.Is(err, ErrNoFragmentation) {
+		t.Fatalf("error = %v, want ErrNoFragmentation", err)
 	}
 }
 
@@ -606,7 +607,7 @@ func TestFlushErrorsWhenQueuedCommandCannotFitWithinPeerMTU(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsendable command error")
 	}
-	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+	if !errors.Is(err, ErrCommandExceedsMTU) {
 		t.Fatalf("error = %v", err)
 	}
 	if got := sock.WriteCount(); got != 0 {
@@ -672,7 +673,7 @@ func TestFlushPreservesQueueStateWhenLaterQueuedCommandCannotFitWithinPeerMTU(t 
 	if err == nil {
 		t.Fatal("expected unsendable command error")
 	}
-	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+	if !errors.Is(err, ErrCommandExceedsMTU) {
 		t.Fatalf("error = %v", err)
 	}
 	if got := sock.WriteCount(); got != 0 {

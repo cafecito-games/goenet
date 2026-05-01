@@ -290,7 +290,8 @@ func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
 		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
 			return fmt.Errorf(
-				"engine: queued command %d cannot fit within peer MTU %d",
+				"%w: command %d, peer mtu %d",
+				ErrCommandExceedsMTU,
 				blocked.Command.Header.Command,
 				p.MTU,
 			)
@@ -314,7 +315,7 @@ func (h *Host) Flush(ctx context.Context) error {
 				return err
 			}
 			if n != len(datagram.payload) {
-				return fmt.Errorf("engine: short write: wrote %d of %d", n, len(datagram.payload))
+				return fmt.Errorf("%w: wrote %d of %d", ErrShortWrite, n, len(datagram.payload))
 			}
 
 			h.commitPreparedDatagram(p, datagram)
@@ -350,7 +351,8 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	selected, blocked := h.selectOutgoingBatch(p)
 	if blocked != nil {
 		return preparedDatagram{}, false, fmt.Errorf(
-			"engine: queued command %d cannot fit within peer MTU %d",
+			"%w: command %d, peer mtu %d",
+			ErrCommandExceedsMTU,
 			blocked.command.Command.Header.Command,
 			p.MTU,
 		)
@@ -576,7 +578,7 @@ func (h *Host) validatePacketSize(p *peer.Peer, channelID uint8, packet *core.Pa
 	// Unsequenced packets cannot be fragmented (no per-fragment ordering anchor),
 	// so they must fit within a single command body.
 	if packet.Flags&core.PacketFlagUnsequenced != 0 && packet.Flags&core.PacketFlagReliable == 0 {
-		return fmt.Errorf("engine: unsequenced packet exceeds no-fragmentation limit: %d", len(packet.Data))
+		return fmt.Errorf("%w: unsequenced %d-byte packet exceeds limit", ErrNoFragmentation, len(packet.Data))
 	}
 
 	var fragmentLength int
@@ -587,14 +589,14 @@ func (h *Host) validatePacketSize(p *peer.Peer, channelID uint8, packet *core.Pa
 		fragmentLength = h.maxUnreliableFragmentDataLength(p)
 	}
 	if fragmentLength <= 0 {
-		return fmt.Errorf("engine: peer mtu %d too small to fragment %d-byte packet", p.MTU, len(packet.Data))
+		return fmt.Errorf("%w: peer mtu %d too small to fragment %d-byte packet", ErrNoFragmentation, p.MTU, len(packet.Data))
 	}
 	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
 	if fragmentCount > int(protocolMaximumFragmentCount) {
-		return fmt.Errorf("engine: packet exceeds fragmentation limit: %d", len(packet.Data))
+		return fmt.Errorf("%w: %d-byte packet would need %d fragments", ErrFragmentationLimit, len(packet.Data), fragmentCount)
 	}
 	if reliable && fragmentCount > remainingReliableSequenceSpace(p, channelID) {
-		return fmt.Errorf("engine: reliable sequence space exhausted for fragmented send")
+		return fmt.Errorf("%w: reliable sequence space exhausted for fragmented send", ErrReliableSequenceExhausted)
 	}
 
 	return nil
@@ -660,7 +662,7 @@ func (h *Host) setupAndQueueOutgoingCommand(p *peer.Peer, command *peer.Outgoing
 func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingCommand) error {
 	channelID := command.Command.Header.ChannelID
 	if channelID != 0xFF && int(channelID) >= len(p.Channels) {
-		return fmt.Errorf("engine: channel %d out of range", channelID)
+		return fmt.Errorf("%w: %d", ErrChannelOutOfRange, channelID)
 	}
 
 	var reliable, unreliable uint16

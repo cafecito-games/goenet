@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"sync"
@@ -373,8 +374,8 @@ func durationMillis(timeout time.Duration) uint32 {
 		return 0
 	}
 
-	if timeout/time.Millisecond >= time.Duration(^uint32(0)) {
-		return ^uint32(0)
+	if timeout/time.Millisecond >= time.Duration(math.MaxUint32) {
+		return math.MaxUint32
 	}
 
 	return uint32(timeout / time.Millisecond)

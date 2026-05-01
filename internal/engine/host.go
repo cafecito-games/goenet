@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -14,6 +15,43 @@ import (
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/socket"
 	"github.com/cafecito-games/goenet/internal/timeutil"
+)
+
+// Sentinel errors returned by the engine. Public callers can match against
+// these via errors.Is, even when the engine wraps them with %w for context.
+var (
+	// ErrNilPeer is returned when a method requires a peer but receives nil.
+	ErrNilPeer = errors.New("engine: nil peer")
+	// ErrNilPacket is returned by Send when the caller passes a nil packet.
+	ErrNilPacket = errors.New("engine: nil packet")
+	// ErrPeerNotConnected is returned when a Send-style operation is invoked
+	// on a peer that is not in PeerStateConnected or PeerStateDisconnectLater.
+	ErrPeerNotConnected = errors.New("engine: peer not connected")
+	// ErrChannelOutOfRange is returned for channel IDs outside the peer's
+	// per-peer channel allocation.
+	ErrChannelOutOfRange = errors.New("engine: channel out of range")
+	// ErrPacketTooLarge is returned when a packet exceeds the host's
+	// configured MaximumPacketSize.
+	ErrPacketTooLarge = errors.New("engine: packet too large")
+	// ErrNoFreePeerSlot is returned by Connect when every peer slot is in use.
+	ErrNoFreePeerSlot = errors.New("engine: no disconnected peers available")
+	// ErrShortWrite is returned when the underlying socket reports a partial
+	// write of an outbound datagram.
+	ErrShortWrite = errors.New("engine: short write")
+	// ErrFragmentationLimit is returned when a reliable send would exceed the
+	// MaximumFragmentCount cap.
+	ErrFragmentationLimit = errors.New("engine: packet exceeds fragmentation limit")
+	// ErrNoFragmentation is returned when a packet exceeds the per-fragment
+	// data limit but cannot be fragmented (unsequenced flag, or peer MTU is
+	// too small to fit any per-fragment overhead).
+	ErrNoFragmentation = errors.New("engine: packet cannot be fragmented")
+	// ErrReliableSequenceExhausted is returned when the channel's outgoing
+	// reliable sequence space has insufficient room for the requested fragment
+	// train.
+	ErrReliableSequenceExhausted = errors.New("engine: reliable sequence space exhausted")
+	// ErrCommandExceedsMTU is returned by Flush when a queued command's wire
+	// size cannot fit into a single datagram given the negotiated peer MTU.
+	ErrCommandExceedsMTU = errors.New("engine: queued command exceeds peer mtu")
 )
 
 const (
@@ -146,19 +184,19 @@ func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 // Send queues one outbound packet for a connected peer channel.
 func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if packet == nil {
-		return fmt.Errorf("engine: nil packet")
+		return ErrNilPacket
 	}
 	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
-		return fmt.Errorf("engine: peer not connected")
+		return fmt.Errorf("%w: state %s", ErrPeerNotConnected, p.State)
 	}
 	if int(channelID) >= len(p.Channels) {
-		return fmt.Errorf("engine: channel %d out of range", channelID)
+		return fmt.Errorf("%w: %d", ErrChannelOutOfRange, channelID)
 	}
 	if len(packet.Data) > int(h.config.MaximumPacketSize) {
-		return fmt.Errorf("engine: packet too large: %d", len(packet.Data))
+		return fmt.Errorf("%w: %d bytes", ErrPacketTooLarge, len(packet.Data))
 	}
 
 	return h.queueOutgoingCommand(p, channelID, packet)
@@ -168,7 +206,7 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 // ctx scopes any synchronous flush triggered by an unsequenced disconnect.
 func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if p.State == core.PeerStateDisconnecting ||
 		p.State == core.PeerStateDisconnected ||
@@ -203,7 +241,7 @@ func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error 
 // ctx scopes the synchronous flush of the disconnect command.
 func (h *Host) DisconnectNow(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if p.State == core.PeerStateDisconnected {
 		return nil
@@ -257,7 +295,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 // DisconnectLater defers disconnect until the peer's outbound reliable work drains.
 func (h *Host) DisconnectLater(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if (p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater) && h.hasOutgoingCommands(p) {
 		h.runtime[p].eventData = data
@@ -297,7 +335,7 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 		}
 	}
 	if p == nil {
-		return nil, fmt.Errorf("engine: no disconnected peers available")
+		return nil, ErrNoFreePeerSlot
 	}
 
 	p = h.configurePeer(p, index, addr, core.PeerStateConnecting)
@@ -633,8 +671,8 @@ func (h *Host) bandwidthThrottle() error {
 		return nil
 	}
 
-	dataTotal := ^uint32(0)
-	bandwidth := ^uint32(0)
+	dataTotal := uint32(math.MaxUint32)
+	bandwidth := uint32(math.MaxUint32)
 	throttle := uint32(0)
 	bandwidthLimit := uint32(0)
 	h.bandwidthLimitedPeers = h.bandwidthLimitedPeerCount()

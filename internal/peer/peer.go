@@ -1,6 +1,8 @@
 package peer
 
 import (
+	"math"
+
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
@@ -150,8 +152,8 @@ func (p *Peer) CanQueueWaitingData(length, maximumWaitingData uint32) bool {
 // math.MaxUint32 rather than wrapping. Callers should gate on CanQueueWaitingData
 // first; the saturation here defends against drift if that contract is missed.
 func (p *Peer) AddWaitingData(length uint32) {
-	if length > ^uint32(0)-p.TotalWaitingData {
-		p.TotalWaitingData = ^uint32(0)
+	if length > math.MaxUint32-p.TotalWaitingData {
+		p.TotalWaitingData = math.MaxUint32
 		return
 	}
 	p.TotalWaitingData += length
