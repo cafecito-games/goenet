@@ -53,15 +53,15 @@ func (p *sendReliablePayload) setOutgoingSequenceNumbers(reliable, _ uint16) {
 	p.reliableSequenceNumber = reliable
 }
 
-// MarshalBinary appends the reliable payload wire encoding to dst.
-func (p *sendReliablePayload) MarshalBinary(dst []byte) []byte {
+// AppendBinary appends the reliable payload wire encoding to dst.
+func (p *sendReliablePayload) AppendBinary(dst []byte) ([]byte, error) {
 	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendReliable | protocol.Command(protocol.CommandFlagAcknowledge))
 	dst[start+1] = p.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], p.reliableSequenceNumber)
 	binary.BigEndian.PutUint16(dst[start+4:start+6], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+6:], p.data)
-	return dst
+	return dst, nil
 }
 
 // WireSize reports the encoded size of the reliable payload command.
@@ -81,8 +81,8 @@ func (p *sendUnreliablePayload) setOutgoingSequenceNumbers(reliable, unreliable 
 	p.unreliableSequenceNumber = unreliable
 }
 
-// MarshalBinary appends the unreliable payload wire encoding to dst.
-func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
+// AppendBinary appends the unreliable payload wire encoding to dst.
+func (p *sendUnreliablePayload) AppendBinary(dst []byte) ([]byte, error) {
 	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendUnreliable)
 	dst[start+1] = p.channelID
@@ -90,7 +90,7 @@ func (p *sendUnreliablePayload) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start+4:start+6], p.unreliableSequenceNumber)
 	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+8:], p.data)
-	return dst
+	return dst, nil
 }
 
 // WireSize reports the encoded size of the unreliable payload command.
@@ -109,8 +109,8 @@ func (p *sendUnsequencedPayload) setOutgoingSequenceNumbers(reliable, _ uint16) 
 	p.reliableSequenceNumber = reliable
 }
 
-// MarshalBinary appends the unsequenced payload wire encoding to dst.
-func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
+// AppendBinary appends the unsequenced payload wire encoding to dst.
+func (p *sendUnsequencedPayload) AppendBinary(dst []byte) ([]byte, error) {
 	dst, start := appendLen(dst, p.WireSize())
 	dst[start] = byte(protocol.CommandSendUnsequenced | protocol.Command(protocol.CommandFlagUnsequenced))
 	dst[start+1] = p.channelID
@@ -118,7 +118,7 @@ func (p *sendUnsequencedPayload) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start+4:start+6], p.unsequencedGroup)
 	binary.BigEndian.PutUint16(dst[start+6:start+8], checkedUint16FromInt(len(p.data)))
 	copy(dst[start+8:], p.data)
-	return dst
+	return dst, nil
 }
 
 // WireSize reports the encoded size of the unsequenced payload command.
@@ -374,10 +374,18 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 
 	for _, item := range selected {
 		if item.ack != nil {
-			body = marshalAcknowledgement(item.ack).MarshalBinary(body)
+			ackBytes, err := marshalAcknowledgement(item.ack).AppendBinary(body)
+			if err != nil {
+				return preparedDatagram{}, false, fmt.Errorf("engine: append ack: %w", err)
+			}
+			body = ackBytes
 			continue
 		}
-		body = item.command.Command.Payload.MarshalBinary(body)
+		appended, err := item.command.Command.Payload.AppendBinary(body)
+		if err != nil {
+			return preparedDatagram{}, false, fmt.Errorf("engine: append command %d: %w", item.command.Command.Header.Command, err)
+		}
+		body = appended
 	}
 
 	if h.config.Compressor != nil {
@@ -392,7 +400,10 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 		}
 	}
 
-	headerBytes := header.MarshalBinary(nil)
+	headerBytes, err := header.AppendBinary(nil)
+	if err != nil {
+		return preparedDatagram{}, false, fmt.Errorf("engine: append header: %w", err)
+	}
 	payload := make([]byte, 0, len(headerBytes)+len(body)+checksumSize(h.config.Checksum))
 	payload = append(payload, headerBytes...)
 	if h.config.Checksum != nil {
@@ -552,7 +563,12 @@ func commandWireSize(cmd *peer.OutgoingCommand) int {
 	if sized, ok := cmd.Command.Payload.(wireSizer); ok {
 		return sized.WireSize()
 	}
-	return len(cmd.Command.Payload.MarshalBinary(nil))
+	// Every payload type used by the engine — both the parallel
+	// sendReliablePayload/sendUnreliablePayload/sendUnsequencedPayload and the
+	// protocol command types — implements WireSize. Reaching this fallback
+	// means a new payload type was added without it; treat that as a
+	// compile-time-style invariant violation.
+	panic(fmt.Sprintf("engine: command payload %T missing WireSize", cmd.Command.Payload))
 }
 
 func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand, withChecksum bool) bool {

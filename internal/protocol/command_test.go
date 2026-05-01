@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,22 @@ import (
 
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
+
+func TestAppendBinaryReportsPayloadTooLarge(t *testing.T) {
+	t.Parallel()
+
+	cmd := protocol.SendReliable{
+		Header: protocol.CommandHeader{Command: protocol.CommandSendReliable, ChannelID: 0},
+		Data:   make([]byte, 1<<16),
+	}
+	_, err := cmd.AppendBinary(nil)
+	if err == nil {
+		t.Fatal("expected ErrPayloadTooLarge for 64KiB payload")
+	}
+	if !errors.Is(err, protocol.ErrPayloadTooLarge) {
+		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+	}
+}
 
 func TestCommandHeaderRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -20,7 +37,10 @@ func TestCommandHeaderRoundTrip(t *testing.T) {
 		ReliableSequenceNumber: 0x1234,
 	}
 
-	wire := header.MarshalBinary(nil)
+	wire, err := header.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("AppendBinary: %v", err)
+	}
 	wantWire := []byte{0x88, 0x07, 0x12, 0x34}
 	if !bytes.Equal(wire, wantWire) {
 		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)
@@ -232,7 +252,11 @@ func TestCommandMatchesGolden(t *testing.T) {
 				t.Fatalf("command mismatch:\n got: %#v\nwant: %#v", cmd, tt.want)
 			}
 
-			if got := cmd.MarshalBinary(nil); !bytes.Equal(got, wire) {
+			got, err := cmd.AppendBinary(nil)
+			if err != nil {
+				t.Fatalf("AppendBinary: %v", err)
+			}
+			if !bytes.Equal(got, wire) {
 				t.Fatalf("marshal mismatch: %x != %x", got, wire)
 			}
 		})
@@ -387,7 +411,11 @@ func TestAdditionalCommandRoundTrips(t *testing.T) {
 			if !reflect.DeepEqual(cmd, tt.want) {
 				t.Fatalf("command mismatch:\n got: %#v\nwant: %#v", cmd, tt.want)
 			}
-			if got := cmd.MarshalBinary(nil); !bytes.Equal(got, tt.wire) {
+			got, err := cmd.AppendBinary(nil)
+			if err != nil {
+				t.Fatalf("AppendBinary: %v", err)
+			}
+			if !bytes.Equal(got, tt.wire) {
 				t.Fatalf("marshal mismatch: %x != %x", got, tt.wire)
 			}
 		})

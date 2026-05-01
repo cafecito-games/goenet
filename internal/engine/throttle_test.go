@@ -472,7 +472,7 @@ func TestOutgoingDataTotalIncludesAcknowledgementCommandBytes(t *testing.T) {
 		ReliableSequenceNumber: 7,
 	}, 123)
 
-	expected := uint32(len(marshalAcknowledgement(raw.Acknowledgements.Front().Value()).MarshalBinary(nil)))
+	expected := uint32(marshalAcknowledgement(raw.Acknowledgements.Front().Value()).WireSize())
 	if got := raw.OutgoingDataTotal; got != expected {
 		t.Fatalf("outgoing data total after ack queue = %d, want %d", got, expected)
 	}
@@ -481,7 +481,7 @@ func TestOutgoingDataTotalIncludesAcknowledgementCommandBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected = uint32(len(marshalAcknowledgement(&ipeer.Acknowledgement{
+	expected = uint32(marshalAcknowledgement(&ipeer.Acknowledgement{
 		SentTime: 123,
 		Command: ipeer.Command{
 			Header: ipeer.Header{
@@ -490,7 +490,7 @@ func TestOutgoingDataTotalIncludesAcknowledgementCommandBytes(t *testing.T) {
 				ReliableSequenceNumber: 7,
 			},
 		},
-	}).MarshalBinary(nil)))
+	}).WireSize())
 	if got := raw.OutgoingDataTotal; got != expected {
 		t.Fatalf("outgoing data total after ack flush = %d, want %d", got, expected)
 	}

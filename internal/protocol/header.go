@@ -13,8 +13,11 @@ type Header struct {
 	Flags     HeaderFlag
 }
 
-// MarshalBinary appends the ENet wire encoding of the header to dst.
-func (h Header) MarshalBinary(dst []byte) []byte {
+// AppendBinary appends the ENet wire encoding of the header to dst, matching
+// the encoding.BinaryAppender convention. The header has no failure modes,
+// so the returned error is always nil; the signature exists for consistency
+// with command-payload appenders that may surface size-bound errors.
+func (h Header) AppendBinary(dst []byte) ([]byte, error) {
 	flagsAndPeerID := h.PeerID & MaximumPeerID
 	flagsAndPeerID |= uint16(h.Flags & HeaderFlagMask)
 	flagsAndPeerID |= (uint16(h.SessionID) << HeaderSessionShift) & HeaderSessionMask
@@ -23,11 +26,11 @@ func (h Header) MarshalBinary(dst []byte) []byte {
 	binary.BigEndian.PutUint16(dst[start:start+HeaderSizeMinimal], flagsAndPeerID)
 
 	if h.Flags&HeaderFlagSentTime == 0 {
-		return dst
+		return dst, nil
 	}
 
 	binary.BigEndian.PutUint16(dst[start+HeaderSizeMinimal:start+HeaderSizeWithSentTime], h.SentTime)
-	return dst
+	return dst, nil
 }
 
 // WireSize reports the encoded size of the packet header.

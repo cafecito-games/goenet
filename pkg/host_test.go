@@ -3,6 +3,7 @@ package goenet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -1204,9 +1205,15 @@ func mustConnectAndVerifyPeer(t *testing.T, host *Host, sock *testsupport.FakeSo
 }
 
 func marshalDatagram(header protocol.Header, commands ...protocol.PacketCommand) []byte {
-	payload := header.MarshalBinary(nil)
+	payload, err := header.AppendBinary(nil)
+	if err != nil {
+		panic(fmt.Sprintf("marshalDatagram header: %v", err))
+	}
 	for _, command := range commands {
-		payload = command.MarshalBinary(payload)
+		payload, err = command.AppendBinary(payload)
+		if err != nil {
+			panic(fmt.Sprintf("marshalDatagram command: %v", err))
+		}
 	}
 
 	return payload

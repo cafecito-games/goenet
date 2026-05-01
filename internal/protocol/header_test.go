@@ -15,7 +15,10 @@ func TestHeaderRoundTrip(t *testing.T) {
 		Flags:     protocol.HeaderFlagSentTime,
 	}
 
-	wire := h.MarshalBinary(nil)
+	wire, err := h.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("AppendBinary: %v", err)
+	}
 	wantWire := []byte{0xa0, 0x07, 0x04, 0xd2}
 	if !bytes.Equal(wire, wantWire) {
 		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)
@@ -41,7 +44,10 @@ func TestParseHeaderRejectsTruncatedSentTime(t *testing.T) {
 func TestHeaderMinimalRoundTrip(t *testing.T) {
 	h := protocol.Header{PeerID: 0x123, SessionID: 1}
 
-	wire := h.MarshalBinary(nil)
+	wire, err := h.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("AppendBinary: %v", err)
+	}
 	wantWire := []byte{0x11, 0x23}
 	if !bytes.Equal(wire, wantWire) {
 		t.Fatalf("marshal bytes = %x, want %x", wire, wantWire)

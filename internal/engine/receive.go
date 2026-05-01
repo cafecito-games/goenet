@@ -1193,7 +1193,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 			},
 		},
 	}
-	p.OutgoingDataTotal += checkedUint32FromInt(len(marshalAcknowledgement(ack).MarshalBinary(nil)))
+	p.OutgoingDataTotal += checkedUint32FromInt(marshalAcknowledgement(ack).WireSize())
 	p.Acknowledgements.PushBack(ack)
 }
 
