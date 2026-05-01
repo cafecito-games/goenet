@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	protocolHeaderSizeWithoutSentTime = 2
-	protocolHeaderSizeWithSentTime    = 4
-	sendReliableCommandSize           = 6
-	sendUnreliableCommandSize         = 8
-	sendUnsequencedCommandSize        = 8
-	sendFragmentCommandSize           = 24
+	protocolHeaderSizeWithoutSentTime = protocol.HeaderSizeMinimal
+	protocolHeaderSizeWithSentTime    = protocol.HeaderSizeWithSentTime
+	sendReliableCommandSize           = protocol.SendReliableCommandSize
+	sendUnreliableCommandSize         = protocol.SendUnreliableCommandSize
+	sendUnsequencedCommandSize        = protocol.SendUnsequencedCommandSize
+	sendFragmentCommandSize           = protocol.SendFragmentCommandSize
 	maximumDatagramsPerPeerFlush      = int(protocol.MaximumPacketCommands)
 )
 

@@ -7,7 +7,6 @@ import (
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
-	isocket "github.com/cafecito-games/goenet/internal/socket"
 )
 
 // PeerState mirrors ENetPeerState ordinal values.
@@ -183,5 +182,5 @@ func (p *Peer) remoteUDPAddr() *net.UDPAddr {
 		return nil
 	}
 	defer unlock()
-	return isocket.UDPAddrFromAddress(raw.Address)
+	return core.UDPAddrFromAddress(raw.Address)
 }

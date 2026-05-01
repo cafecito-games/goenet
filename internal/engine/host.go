@@ -109,6 +109,13 @@ func (h *Host) Peers() []*peer.Peer {
 	return h.peers
 }
 
+// Close releases the engine's underlying datagram socket. After Close the host
+// must not be used; subsequent Service/Flush calls will surface a closed-socket
+// error from the underlying I/O.
+func (h *Host) Close() error {
+	return h.socket.Close()
+}
+
 // SetServiceTime overrides the engine's millisecond clock to t. The public host
 // calls this at the start of every Service/Flush from a wall clock so RTT,
 // retransmit, and throttle math observe real elapsed time. Tests use it to drive

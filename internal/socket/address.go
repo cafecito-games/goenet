@@ -1,80 +1,25 @@
 package socket
 
 import (
-	"fmt"
 	"net"
 	"net/netip"
-	"strconv"
 
 	"github.com/cafecito-games/goenet/internal/core"
 )
 
-// AddressFromAddrPort converts a possibly-zoned AddrPort into the internal address form.
+// AddressFromAddrPort is a thin re-export of core.AddressFromAddrPort kept here
+// so callers that already depend on the socket package don't need a second
+// import. New code should prefer core.AddressFromAddrPort directly.
 func AddressFromAddrPort(addr netip.AddrPort) (core.Address, error) {
-	scopeID, err := scopeIDFromZone(addr.Addr().Zone())
-	if err != nil {
-		return core.Address{}, err
-	}
-
-	unzoned := netip.AddrPortFrom(addr.Addr().WithZone("").Unmap(), addr.Port())
-	return core.NewAddress(unzoned, scopeID)
+	return core.AddressFromAddrPort(addr)
 }
 
-// AddressFromUDPAddr converts a UDPAddr into the internal address form.
+// AddressFromUDPAddr is a thin re-export of core.AddressFromUDPAddr.
 func AddressFromUDPAddr(addr *net.UDPAddr) (core.Address, error) {
-	if addr == nil {
-		return core.Address{}, fmt.Errorf("socket: nil UDP address")
-	}
-
-	scopeID, err := scopeIDFromZone(addr.Zone)
-	if err != nil {
-		return core.Address{}, err
-	}
-
-	addrPort := addr.AddrPort()
-	unzoned := netip.AddrPortFrom(addrPort.Addr().WithZone("").Unmap(), addrPort.Port())
-	return core.NewAddress(unzoned, scopeID)
+	return core.AddressFromUDPAddr(addr)
 }
 
-// UDPAddrFromAddress converts an internal address into a UDPAddr suitable for socket I/O.
+// UDPAddrFromAddress is a thin re-export of core.UDPAddrFromAddress.
 func UDPAddrFromAddress(addr core.Address) *net.UDPAddr {
-	addrPort := addr.AddrPort()
-	return &net.UDPAddr{
-		IP:   net.IP(addrPort.Addr().AsSlice()),
-		Port: int(addrPort.Port()),
-		Zone: zoneFromScopeID(addr.ScopeID()),
-	}
-}
-
-func scopeIDFromZone(zone string) (uint32, error) {
-	if zone == "" {
-		return 0, nil
-	}
-	if id, err := strconv.ParseUint(zone, 10, 32); err == nil {
-		return uint32(id), nil
-	}
-
-	iface, err := net.InterfaceByName(zone)
-	if err != nil {
-		return 0, fmt.Errorf("socket: resolve interface zone %q: %w", zone, err)
-	}
-	if iface.Index < 0 {
-		return 0, fmt.Errorf("socket: interface %q has negative index %d", zone, iface.Index)
-	}
-	id, err := strconv.ParseUint(strconv.Itoa(iface.Index), 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("socket: parse interface %q index %d: %w", zone, iface.Index, err)
-	}
-	return uint32(id), nil
-}
-
-func zoneFromScopeID(scopeID uint32) string {
-	if scopeID == 0 {
-		return ""
-	}
-
-	// Go's resolver accepts numeric IPv6 zones directly, so we can skip the
-	// per-call net.InterfaceByIndex syscall that would otherwise fire on every
-	// outbound write to a scoped peer.
-	return strconv.FormatUint(uint64(scopeID), 10)
+	return core.UDPAddrFromAddress(addr)
 }

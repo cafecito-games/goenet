@@ -35,7 +35,6 @@ type Host struct {
 	config    Config
 	logger    *slog.Logger
 	localAddr net.Addr
-	socket    isocket.DatagramSocket
 	engine    *engine.Host
 	peers     map[*peer.Peer]*Peer
 	closed    atomic.Bool
@@ -115,7 +114,7 @@ func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, err
 		return nil, err
 	}
 
-	address, err := isocket.AddressFromUDPAddr(udpAddr)
+	address, err := core.AddressFromUDPAddr(udpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +222,7 @@ func (h *Host) Close() error {
 	}
 	h.closed.Store(true)
 
-	if err := h.socket.Close(); err != nil {
+	if err := h.engine.Close(); err != nil {
 		// Caller is responsible for surfacing close errors to its observability
 		// stack; logging here would double-report. Keep the success-path Debug
 		// line so an operator still sees the lifecycle event.
@@ -275,7 +274,6 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) (*Host, error) {
 	return &Host{
 		config:    normalized,
 		logger:    hostLogger,
-		socket:    sock,
 		engine:    engine.NewHost(coreCfg, sock, 0),
 		peers:     make(map[*peer.Peer]*Peer),
 		startTime: time.Now(),
