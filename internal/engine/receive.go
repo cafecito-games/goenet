@@ -262,7 +262,10 @@ func (h *Host) handleIncomingCommand(
 		if h.handleAcknowledge(*currentPeer, cmd) {
 			return inboundAccept
 		}
-		return inboundReject
+		// A malformed-but-recoverable ACK (out-of-window timestamp, mismatched
+		// connect-state command code) must not abort the rest of the datagram —
+		// later commands in the same packet are still valid.
+		return inboundIgnore
 	case protocol.Connect:
 		if *currentPeer != nil {
 			return inboundReject
@@ -335,7 +338,28 @@ func (h *Host) handleIncomingCommand(
 
 func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.Peer {
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
+		h.logger.Debug("connect rejected", "reason", "channel_count_out_of_range", "channel_count", command.ChannelCount)
 		return nil
+	}
+
+	// Match enet_protocol_handle_connect (enet.h:1855-1866): if a peer already
+	// exists for this (address, connectID) tuple in any non-terminal state, the
+	// incoming Connect is a retransmit and must not allocate a new slot.
+	for _, candidate := range h.peers {
+		if candidate == nil {
+			continue
+		}
+		if candidate.State == core.PeerStateDisconnected || candidate.State == core.PeerStateZombie {
+			continue
+		}
+		if candidate.Address == addr && candidate.ConnectID == command.ConnectID {
+			h.logger.Debug(
+				"connect ignored as duplicate",
+				"peer_id", candidate.IncomingPeerID,
+				"connect_id", candidate.ConnectID,
+			)
+			return nil
+		}
 	}
 
 	var selected *peer.Peer
@@ -346,6 +370,7 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 		}
 	}
 	if selected == nil {
+		h.logger.Debug("connect rejected", "reason", "no_peer_slot")
 		return nil
 	}
 
@@ -912,6 +937,24 @@ func (h *Host) dispatchReliableCommands(p *peer.Peer, channel *peer.Channel) {
 }
 
 func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
+	// Two passes mirror enet_protocol_dispatch_incoming_unreliable_commands:
+	// pass 1 prunes anything stranded behind an advanced reliable anchor so the
+	// dispatch pass sees a clean head, pass 2 walks consecutive in-order entries
+	// until the first ineligible one. Mixing drop and dispatch in a single loop
+	// can leave droppable items behind a head that halts dispatch on an
+	// incomplete fragment train.
+	for elem := channel.IncomingUnreliableCommands.Front(); elem != nil; {
+		cmd := elem.Value()
+		next := elem.Next()
+		if cmd.Command.Header.Command != protocol.CommandSendUnsequenced && shouldDropUnreliable(channel, cmd) {
+			channel.IncomingUnreliableCommands.Remove(elem)
+			if cmd.Packet != nil {
+				p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
+			}
+		}
+		elem = next
+	}
+
 	moved := false
 	for {
 		front := channel.IncomingUnreliableCommands.Front()
@@ -923,14 +966,6 @@ func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
 			channel.IncomingUnreliableCommands.Remove(front)
 			p.QueueDispatchedCommand(cmd)
 			moved = true
-			continue
-		}
-
-		if shouldDropUnreliable(channel, cmd) {
-			channel.IncomingUnreliableCommands.Remove(front)
-			if cmd.Packet != nil {
-				p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
-			}
 			continue
 		}
 		if cmd.ReliableSequenceNumber != channel.IncomingReliableSequenceNumber || !cmd.IsComplete() {
@@ -980,7 +1015,15 @@ func (h *Host) dispatchEvent() (Event, bool) {
 			}, true
 		case core.PeerStateConnected:
 			cmd := p.PopDispatchedCommand()
-			if cmd == nil || cmd.Packet == nil {
+			if cmd == nil {
+				continue
+			}
+			// Nil-packet entries should not exist on the dispatch queue (every
+			// queueing path constructs a packet); if one ever lands here, log
+			// loudly and skip so the caller does not see EventReceive with a
+			// nil Packet, but otherwise treat it as zero waiting bytes.
+			if cmd.Packet == nil {
+				h.logger.Warn("dispatch dropped nil-packet receive", "peer_id", p.IncomingPeerID)
 				continue
 			}
 			p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
@@ -1058,92 +1101,8 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 }
 
 func (h *Host) clearPeerQueues(p *peer.Peer) {
-	state := p.State
-	incomingPeerID := p.IncomingPeerID
-	outgoingPeerID := p.OutgoingPeerID
-	connectID := p.ConnectID
-	outgoingSessionID := p.OutgoingSessionID
-	incomingSessionID := p.IncomingSessionID
-	mtu := p.MTU
-	address := p.Address
-	incomingBandwidth := p.IncomingBandwidth
-	outgoingBandwidth := p.OutgoingBandwidth
-	incomingDataTotal := p.IncomingDataTotal
-	outgoingDataTotal := p.OutgoingDataTotal
-	incomingBandwidthThrottleEpoch := p.IncomingBandwidthThrottleEpoch
-	outgoingBandwidthThrottleEpoch := p.OutgoingBandwidthThrottleEpoch
-	lastSendTime := p.LastSendTime
-	lastReceiveTime := p.LastReceiveTime
-	nextTimeout := p.NextTimeout
-	earliestTimeout := p.EarliestTimeout
-	packetsLost := p.PacketsLost
-	totalPacketsLost := p.TotalPacketsLost
-	packetThrottle := p.PacketThrottle
-	packetThrottleLimit := p.PacketThrottleLimit
-	packetThrottleCounter := p.PacketThrottleCounter
-	packetThrottleEpoch := p.PacketThrottleEpoch
-	packetThrottleAcceleration := p.PacketThrottleAcceleration
-	packetThrottleDeceleration := p.PacketThrottleDeceleration
-	packetThrottleInterval := p.PacketThrottleInterval
-	timeoutLimit := p.TimeoutLimit
-	timeoutMinimum := p.TimeoutMinimum
-	timeoutMaximum := p.TimeoutMaximum
-	lastRoundTripTime := p.LastRoundTripTime
-	lowestRoundTripTime := p.LowestRoundTripTime
-	lastRoundTripTimeVariance := p.LastRoundTripTimeVariance
-	highestRoundTripTimeVariance := p.HighestRoundTripTimeVariance
-	roundTripTime := p.RoundTripTime
-	roundTripTimeVariance := p.RoundTripTimeVariance
-	reliableDataInTransit := p.ReliableDataInTransit
-	outgoingReliableSequenceNumber := p.OutgoingReliableSequenceNumber
-	outgoingUnsequencedGroup := p.OutgoingUnsequencedGroup
-	incomingUnsequencedGroup := p.IncomingUnsequencedGroup
-	unsequencedWindow := p.UnsequencedWindow
-
 	h.removePeerDispatch(p)
-	*p = peer.Peer{
-		OutgoingReliableSequenceNumber: outgoingReliableSequenceNumber,
-		OutgoingUnsequencedGroup:       outgoingUnsequencedGroup,
-		OutgoingPeerID:                 outgoingPeerID,
-		IncomingPeerID:                 incomingPeerID,
-		ConnectID:                      connectID,
-		OutgoingSessionID:              outgoingSessionID,
-		IncomingSessionID:              incomingSessionID,
-		MTU:                            mtu,
-		Address:                        address,
-		State:                          state,
-		IncomingBandwidth:              incomingBandwidth,
-		OutgoingBandwidth:              outgoingBandwidth,
-		IncomingDataTotal:              incomingDataTotal,
-		OutgoingDataTotal:              outgoingDataTotal,
-		IncomingBandwidthThrottleEpoch: incomingBandwidthThrottleEpoch,
-		OutgoingBandwidthThrottleEpoch: outgoingBandwidthThrottleEpoch,
-		LastSendTime:                   lastSendTime,
-		LastReceiveTime:                lastReceiveTime,
-		NextTimeout:                    nextTimeout,
-		EarliestTimeout:                earliestTimeout,
-		PacketsLost:                    packetsLost,
-		TotalPacketsLost:               totalPacketsLost,
-		PacketThrottle:                 packetThrottle,
-		PacketThrottleLimit:            packetThrottleLimit,
-		PacketThrottleCounter:          packetThrottleCounter,
-		PacketThrottleEpoch:            packetThrottleEpoch,
-		PacketThrottleAcceleration:     packetThrottleAcceleration,
-		PacketThrottleDeceleration:     packetThrottleDeceleration,
-		PacketThrottleInterval:         packetThrottleInterval,
-		TimeoutLimit:                   timeoutLimit,
-		TimeoutMinimum:                 timeoutMinimum,
-		TimeoutMaximum:                 timeoutMaximum,
-		LastRoundTripTime:              lastRoundTripTime,
-		LowestRoundTripTime:            lowestRoundTripTime,
-		LastRoundTripTimeVariance:      lastRoundTripTimeVariance,
-		HighestRoundTripTimeVariance:   highestRoundTripTimeVariance,
-		RoundTripTime:                  roundTripTime,
-		RoundTripTimeVariance:          roundTripTimeVariance,
-		ReliableDataInTransit:          reliableDataInTransit,
-		IncomingUnsequencedGroup:       incomingUnsequencedGroup,
-		UnsequencedWindow:              unsequencedWindow,
-	}
+	p.ResetQueues()
 }
 
 func (h *Host) resetPeer(p *peer.Peer) {

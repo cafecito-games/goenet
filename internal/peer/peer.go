@@ -120,6 +120,23 @@ func (p *Peer) UnindexSentReliableCommand(cmd *OutgoingCommand) {
 	})
 }
 
+// ResetQueues clears the per-peer command queues, channel slice, and waiting-data
+// counter used during a Disconnect or DisconnectNow. Identity, address, MTU,
+// timing, throttle, and bandwidth fields are left intact so the engine can still
+// emit the outgoing disconnect command and continue retransmit/ack accounting
+// until the peer is fully zombified. Callers must remove the peer from any
+// host-level dispatch queue separately; that is engine-owned state.
+func (p *Peer) ResetQueues() {
+	p.Acknowledgements = acknowledgementQueue{}
+	p.OutgoingCommands = outgoingQueue{}
+	p.OutgoingSendReliableCommands = outgoingQueue{}
+	p.SentReliableCommands = outgoingQueue{}
+	p.sentReliableIndex = nil
+	p.DispatchedCommands = incomingQueue{}
+	p.Channels = nil
+	p.TotalWaitingData = 0
+}
+
 // CanQueueWaitingData reports whether another packet fits under the configured waiting-data cap.
 func (p *Peer) CanQueueWaitingData(length, maximumWaitingData uint32) bool {
 	if length > maximumWaitingData {

@@ -285,12 +285,11 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) (*Host, error) {
 // ms with overflow-safe comparisons; anchoring on startTime keeps the value small
 // for the lifetime of the host while still tracking real elapsed time. After
 // ~49.7 days the counter wraps, which the timeutil overflow-safe helpers handle.
+//
+// time.Since uses the monotonic clock when startTime carries a monotonic reading
+// (which time.Now does), so the returned duration is always non-negative.
 func (h *Host) nowMs() uint32 {
-	elapsed := time.Since(h.startTime) / time.Millisecond
-	if elapsed < 0 {
-		return 0
-	}
-	return uint32(elapsed) //nolint:gosec // intentional uint32 wrap; ENet ms math is overflow-safe.
+	return uint32(time.Since(h.startTime) / time.Millisecond) //nolint:gosec // intentional uint32 wrap; ENet ms math is overflow-safe.
 }
 
 func cloneNetAddr(addr net.Addr) net.Addr {

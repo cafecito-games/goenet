@@ -614,7 +614,12 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 		p.OutgoingUnsequencedGroup++
 	default:
 		channel := p.Channels[channelID]
-		channel.OutgoingUnreliableSequenceNumber++
+		// Match enet.h:4174-4176: only the first fragment of an unreliable packet
+		// gets a fresh unreliable sequence number; later fragments share it so the
+		// receiver's reassembly anchor sees them as one logical packet.
+		if command.FragmentOffset == 0 {
+			channel.OutgoingUnreliableSequenceNumber++
+		}
 		reliable = channel.OutgoingReliableSequenceNumber
 		unreliable = channel.OutgoingUnreliableSequenceNumber
 	}

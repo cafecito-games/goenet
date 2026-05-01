@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"time"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -92,8 +93,8 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 		serviceTime:   serviceTime,
 		dispatchSet:   make(map[*peer.Peer]struct{}),
 		runtime:       make(map[*peer.Peer]*peerRuntime),
-		nextConnectID: randomConnectIDSeed(),
-		sessionIDSeed: randomSessionIDSeed(),
+		nextConnectID: randomConnectIDSeed(cfg.Logger),
+		sessionIDSeed: randomSessionIDSeed(cfg.Logger),
 	}
 	for index := 0; index < cfg.PeerCount; index++ {
 		host.peers = append(host.peers, host.newPeerSlot(index))
@@ -409,22 +410,30 @@ func (h *Host) nextPeerConnectID() uint32 {
 	return h.nextConnectID
 }
 
-// randomConnectIDSeed seeds the per-host connect ID counter from crypto/rand so
-// peers can disambiguate stale datagrams across host restarts. Failure to read
-// from the OS entropy source is non-fatal — the counter still produces unique
-// monotonic IDs within a single host lifetime.
-func randomConnectIDSeed() uint32 {
+// randomConnectIDSeed seeds the per-host connect ID counter so peers can
+// disambiguate stale datagrams across host restarts. crypto/rand is preferred;
+// if entropy is unavailable (e.g. a locked-down sandbox) it falls back to
+// nanosecond wall time so the counter still varies between consecutive starts.
+func randomConnectIDSeed(logger *slog.Logger) uint32 {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return 0
+		core.ComponentLogger(logger, "engine").Warn(
+			"connect id seed entropy unavailable, falling back to wall time",
+			"err", err,
+		)
+		return uint32(time.Now().UnixNano()) //nolint:gosec // intentional truncation; only mixes entropy.
 	}
 	return binary.BigEndian.Uint32(b[:])
 }
 
-func randomSessionIDSeed() uint8 {
+func randomSessionIDSeed(logger *slog.Logger) uint8 {
 	var b [1]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return 0
+		core.ComponentLogger(logger, "engine").Warn(
+			"session id seed entropy unavailable, falling back to wall time",
+			"err", err,
+		)
+		return uint8(time.Now().UnixNano()) % 3 //nolint:gosec // intentional truncation; mod-3 mix.
 	}
 	return b[0] % 3
 }
