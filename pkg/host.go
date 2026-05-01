@@ -179,7 +179,7 @@ func (h *Host) Flush(ctx context.Context) error {
 // are collected and returned together via errors.Join; a partial fanout still attempts
 // every peer rather than aborting on the first failure.
 func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
-	corePacket := toCorePacket(packet)
+	corePacket := copyPacketIn(packet)
 
 	if err := h.lockOpen(); err != nil {
 		return err
@@ -333,14 +333,14 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 
 	if wrapped, ok := h.peers[raw]; ok {
 		wrapped.raw = raw
-		wrapped.state = fromCorePeerState(raw.State)
+		wrapped.state = raw.State
 		return wrapped
 	}
 
 	wrapped := &Peer{
 		host:  h,
 		raw:   raw,
-		state: fromCorePeerState(raw.State),
+		state: raw.State,
 	}
 	h.peers[raw] = wrapped
 	return wrapped
@@ -349,11 +349,11 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 func (h *Host) translateEvent(event engine.Event) Event {
 	wrapped := h.wrapPeer(event.Peer)
 	out := Event{
-		Type:      EventType(event.Type),
+		Type:      event.Type,
 		Peer:      wrapped,
 		ChannelID: event.ChannelID,
 		Data:      event.Data,
-		Packet:    fromCorePacket(event.Packet),
+		Packet:    event.Packet,
 	}
 	// After surfacing a terminal peer event, drop the wrapper from the map so a
 	// future re-use of the same engine peer slot allocates a fresh public Peer

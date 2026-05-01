@@ -49,11 +49,15 @@ func normalizeConfig(cfg Config) (normalized Config, coreCfg core.Config, err er
 	if cfg.MaximumWaitingData != 0 {
 		coreCfg.MaximumWaitingData = cfg.MaximumWaitingData
 	}
+	// Checksummer and Compressor are type aliases for core.* equivalents, so
+	// the public interfaces flow straight through without an adapter shim.
+	// Interceptor still needs a small bridge because public InterceptDecision
+	// carries a public *Event with a *Peer handle.
 	if cfg.Checksum != nil {
-		coreCfg.Checksum = checksummerAdapter{inner: cfg.Checksum}
+		coreCfg.Checksum = cfg.Checksum
 	}
 	if cfg.Compressor != nil {
-		coreCfg.Compressor = compressorAdapter{inner: cfg.Compressor}
+		coreCfg.Compressor = cfg.Compressor
 	}
 	if cfg.Intercept != nil {
 		coreCfg.Intercept = interceptorAdapter{inner: cfg.Intercept}

@@ -10,29 +10,29 @@ import (
 )
 
 // PeerState mirrors ENetPeerState ordinal values.
-type PeerState uint8
+type PeerState = core.PeerState
 
 const (
 	// PeerStateDisconnected reports that no live session exists for the peer.
-	PeerStateDisconnected PeerState = iota
+	PeerStateDisconnected = core.PeerStateDisconnected
 	// PeerStateConnecting reports that an outbound connect command was queued.
-	PeerStateConnecting
+	PeerStateConnecting = core.PeerStateConnecting
 	// PeerStateAcknowledgingConnect reports that the peer is acknowledging an inbound connect.
-	PeerStateAcknowledgingConnect
+	PeerStateAcknowledgingConnect = core.PeerStateAcknowledgingConnect
 	// PeerStateConnectionPending reports that the peer is waiting for verify-connect.
-	PeerStateConnectionPending
+	PeerStateConnectionPending = core.PeerStateConnectionPending
 	// PeerStateConnectionSucceeded reports that the connect handshake has succeeded locally.
-	PeerStateConnectionSucceeded
+	PeerStateConnectionSucceeded = core.PeerStateConnectionSucceeded
 	// PeerStateConnected reports that the peer is fully connected.
-	PeerStateConnected
+	PeerStateConnected = core.PeerStateConnected
 	// PeerStateDisconnectLater reports that disconnect is deferred until reliable queues drain.
-	PeerStateDisconnectLater
+	PeerStateDisconnectLater = core.PeerStateDisconnectLater
 	// PeerStateDisconnecting reports that a graceful disconnect is in progress.
-	PeerStateDisconnecting
+	PeerStateDisconnecting = core.PeerStateDisconnecting
 	// PeerStateAcknowledgingDisconnect reports that disconnect acknowledgment is pending.
-	PeerStateAcknowledgingDisconnect
+	PeerStateAcknowledgingDisconnect = core.PeerStateAcknowledgingDisconnect
 	// PeerStateZombie reports that the peer is awaiting local cleanup after disconnect.
-	PeerStateZombie
+	PeerStateZombie = core.PeerStateZombie
 )
 
 // Peer is the public handle for a remote endpoint.
@@ -81,7 +81,7 @@ func (p *Peer) State() PeerState {
 	p.host.mu.Lock()
 	defer p.host.mu.Unlock()
 	if p.raw != nil {
-		p.state = fromCorePeerState(p.raw.State)
+		p.state = p.raw.State
 	}
 	return p.state
 }
@@ -106,7 +106,7 @@ func (p *Peer) RemoteAddrPort() netip.AddrPort {
 
 // Send queues a packet for transmission to the peer.
 func (p *Peer) Send(channelID uint8, packet *Packet) error {
-	corePacket := toCorePacket(packet)
+	corePacket := copyPacketIn(packet)
 	raw, unlock, err := p.lockedRaw()
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (p *Peer) Disconnect(ctx context.Context, data uint32) error {
 	if err := p.host.engine.Disconnect(ctx, raw, data); err != nil {
 		return err
 	}
-	p.state = fromCorePeerState(raw.State)
+	p.state = raw.State
 	return nil
 }
 
@@ -142,7 +142,7 @@ func (p *Peer) DisconnectNow(ctx context.Context, data uint32) error {
 	if err := p.host.engine.DisconnectNow(ctx, raw, data); err != nil {
 		return err
 	}
-	p.state = fromCorePeerState(raw.State)
+	p.state = raw.State
 	return nil
 }
 
@@ -157,7 +157,7 @@ func (p *Peer) DisconnectLater(ctx context.Context, data uint32) error {
 	if err := p.host.engine.DisconnectLater(ctx, raw, data); err != nil {
 		return err
 	}
-	p.state = fromCorePeerState(raw.State)
+	p.state = raw.State
 	return nil
 }
 
@@ -169,11 +169,7 @@ func (p *Peer) Reset() {
 	}
 	defer unlock()
 	p.host.engine.Reset(raw)
-	p.state = fromCorePeerState(raw.State)
-}
-
-func fromCorePeerState(state core.PeerState) PeerState {
-	return PeerState(state)
+	p.state = raw.State
 }
 
 func (p *Peer) remoteUDPAddr() *net.UDPAddr {
