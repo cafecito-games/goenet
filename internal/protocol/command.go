@@ -13,6 +13,16 @@ type PacketCommand interface {
 	MarshalBinary(dst []byte) []byte
 }
 
+// HeaderedCommand is implemented by every command payload that carries an
+// ENet command header. The engine uses this to populate the Command/Channel/
+// Flags/ReliableSequenceNumber fields after sequence-number assignment,
+// without a per-type switch — adding a new command type that satisfies the
+// interface keeps the engine routing automatically correct.
+type HeaderedCommand interface {
+	PacketCommand
+	SetHeader(CommandHeader)
+}
+
 // CommandHeader preserves the common ENet command header plus packed command flags.
 type CommandHeader struct {
 	Command                Command
@@ -162,6 +172,9 @@ func (a Acknowledge) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the acknowledge command.
 func (a Acknowledge) WireSize() int { return AcknowledgeCommandSize }
 
+// SetHeader replaces the Acknowledge command header. See HeaderedCommand.
+func (a *Acknowledge) SetHeader(h CommandHeader) { a.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the connect command to dst.
 func (c Connect) MarshalBinary(dst []byte) []byte {
 	header := c.Header
@@ -191,6 +204,9 @@ func (c Connect) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the connect command.
 func (c Connect) WireSize() int { return ConnectCommandSize }
 
+// SetHeader replaces the Connect command header. See HeaderedCommand.
+func (c *Connect) SetHeader(h CommandHeader) { c.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the verify-connect command to dst.
 func (c VerifyConnect) MarshalBinary(dst []byte) []byte {
 	header := c.Header
@@ -218,6 +234,9 @@ func (c VerifyConnect) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the verify-connect command.
 func (c VerifyConnect) WireSize() int { return VerifyConnectCommandSize }
 
+// SetHeader replaces the VerifyConnect command header. See HeaderedCommand.
+func (c *VerifyConnect) SetHeader(h CommandHeader) { c.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the disconnect command to dst.
 func (d Disconnect) MarshalBinary(dst []byte) []byte {
 	header := d.Header
@@ -233,6 +252,9 @@ func (d Disconnect) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the disconnect command.
 func (d Disconnect) WireSize() int { return DisconnectCommandSize }
 
+// SetHeader replaces the Disconnect command header. See HeaderedCommand.
+func (d *Disconnect) SetHeader(h CommandHeader) { d.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the ping command to dst.
 func (p Ping) MarshalBinary(dst []byte) []byte {
 	header := p.Header
@@ -243,6 +265,9 @@ func (p Ping) MarshalBinary(dst []byte) []byte {
 
 // WireSize reports the encoded size of the ping command.
 func (p Ping) WireSize() int { return CommandHeaderSize }
+
+// SetHeader replaces the Ping command header. See HeaderedCommand.
+func (p *Ping) SetHeader(h CommandHeader) { p.Header = h }
 
 // MarshalBinary appends the ENet wire encoding of the reliable payload command to dst.
 func (s SendReliable) MarshalBinary(dst []byte) []byte {
@@ -261,6 +286,9 @@ func (s SendReliable) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the reliable payload command.
 func (s SendReliable) WireSize() int { return SendReliableCommandSize + len(s.Data) }
 
+// SetHeader replaces the SendReliable command header. See HeaderedCommand.
+func (s *SendReliable) SetHeader(h CommandHeader) { s.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the unreliable payload command to dst.
 func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
 	header := s.Header
@@ -277,6 +305,9 @@ func (s SendUnreliable) MarshalBinary(dst []byte) []byte {
 
 // WireSize reports the encoded size of the unreliable payload command.
 func (s SendUnreliable) WireSize() int { return SendUnreliableCommandSize + len(s.Data) }
+
+// SetHeader replaces the SendUnreliable command header. See HeaderedCommand.
+func (s *SendUnreliable) SetHeader(h CommandHeader) { s.Header = h }
 
 // MarshalBinary appends the ENet wire encoding of the unsequenced payload command to dst.
 func (s SendUnsequenced) MarshalBinary(dst []byte) []byte {
@@ -295,6 +326,9 @@ func (s SendUnsequenced) MarshalBinary(dst []byte) []byte {
 
 // WireSize reports the encoded size of the unsequenced payload command.
 func (s SendUnsequenced) WireSize() int { return SendUnsequencedCommandSize + len(s.Data) }
+
+// SetHeader replaces the SendUnsequenced command header. See HeaderedCommand.
+func (s *SendUnsequenced) SetHeader(h CommandHeader) { s.Header = h }
 
 // MarshalBinary appends the ENet wire encoding of the fragment command to dst.
 func (s SendFragment) MarshalBinary(dst []byte) []byte {
@@ -322,6 +356,9 @@ func (s SendFragment) MarshalBinary(dst []byte) []byte {
 // WireSize reports the encoded size of the fragment command.
 func (s SendFragment) WireSize() int { return SendFragmentCommandSize + len(s.Data) }
 
+// SetHeader replaces the SendFragment command header. See HeaderedCommand.
+func (s *SendFragment) SetHeader(h CommandHeader) { s.Header = h }
+
 // MarshalBinary appends the ENet wire encoding of the bandwidth-limit command to dst.
 func (b BandwidthLimit) MarshalBinary(dst []byte) []byte {
 	header := b.Header
@@ -337,6 +374,9 @@ func (b BandwidthLimit) MarshalBinary(dst []byte) []byte {
 
 // WireSize reports the encoded size of the bandwidth-limit command.
 func (b BandwidthLimit) WireSize() int { return BandwidthLimitCommandSize }
+
+// SetHeader replaces the BandwidthLimit command header. See HeaderedCommand.
+func (b *BandwidthLimit) SetHeader(h CommandHeader) { b.Header = h }
 
 // MarshalBinary appends the ENet wire encoding of the throttle-configure command to dst.
 func (t ThrottleConfigure) MarshalBinary(dst []byte) []byte {
@@ -354,6 +394,9 @@ func (t ThrottleConfigure) MarshalBinary(dst []byte) []byte {
 
 // WireSize reports the encoded size of the throttle-configure command.
 func (t ThrottleConfigure) WireSize() int { return ThrottleConfigureCommandSize }
+
+// SetHeader replaces the ThrottleConfigure command header. See HeaderedCommand.
+func (t *ThrottleConfigure) SetHeader(h CommandHeader) { t.Header = h }
 
 // ParseCommand decodes one ENet command from src and reports how many bytes it consumed.
 func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {

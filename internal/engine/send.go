@@ -715,29 +715,16 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 }
 
 func applyOutgoingHeader(payload protocol.PacketCommand, header peer.Header) {
-	commandHeader := protocol.CommandHeader{
+	hc, ok := payload.(protocol.HeaderedCommand)
+	if !ok {
+		return
+	}
+	hc.SetHeader(protocol.CommandHeader{
 		Command:                header.Command,
 		ChannelID:              header.ChannelID,
 		Flags:                  header.Flags,
 		ReliableSequenceNumber: header.ReliableSequenceNumber,
-	}
-
-	switch cmd := payload.(type) {
-	case *protocol.Connect:
-		cmd.Header = commandHeader
-	case *protocol.VerifyConnect:
-		cmd.Header = commandHeader
-	case *protocol.Disconnect:
-		cmd.Header = commandHeader
-	case *protocol.Ping:
-		cmd.Header = commandHeader
-	case *protocol.SendFragment:
-		cmd.Header = commandHeader
-	case *protocol.BandwidthLimit:
-		cmd.Header = commandHeader
-	case *protocol.ThrottleConfigure:
-		cmd.Header = commandHeader
-	}
+	})
 }
 
 func headerOverhead(withSentTime, withChecksum bool) int {
