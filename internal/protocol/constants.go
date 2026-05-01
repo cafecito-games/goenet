@@ -78,19 +78,45 @@ const (
 	// HeaderSessionMask selects the packed session bits from the header peer ID field.
 	HeaderSessionMask uint16 = 3 << 12
 	// HeaderSessionShift is the bit offset of the packed session ID within the header peer ID field.
-	HeaderSessionShift           = 12
-	headerMinimalSize            = 2
-	headerSize                   = 4
-	commandHeaderSize            = 4
-	acknowledgeCommandSize       = 8
-	connectCommandSize           = 48
-	verifyConnectCommandSize     = 44
-	disconnectCommandSize        = 8
-	pingCommandSize              = 4
-	sendReliableCommandSize      = 6
-	sendUnreliableCommandSize    = 8
-	sendUnsequencedCommandSize   = 8
-	sendFragmentCommandSize      = 24
-	bandwidthLimitCommandSize    = 12
-	throttleConfigureCommandSize = 16
+	HeaderSessionShift = 12
+
+	// HeaderSizeMinimal is the size of a packet header that omits the sent-time field.
+	HeaderSizeMinimal = 2
+	// HeaderSizeWithSentTime is the size of a packet header that carries the sent-time field.
+	HeaderSizeWithSentTime = 4
+	// CommandHeaderSize is the size of the per-command header that prefixes each command.
+	CommandHeaderSize = 4
+	// AcknowledgeCommandSize is the wire size of an Acknowledge command.
+	AcknowledgeCommandSize = 8
+	// ConnectCommandSize is the wire size of a Connect command.
+	ConnectCommandSize = 48
+	// VerifyConnectCommandSize is the wire size of a VerifyConnect command.
+	VerifyConnectCommandSize = 44
+	// DisconnectCommandSize is the wire size of a Disconnect command.
+	DisconnectCommandSize = 8
+	// PingCommandSize is the wire size of a Ping command.
+	PingCommandSize = 4
+	// SendReliableCommandSize is the wire size of a SendReliable command (without payload bytes).
+	SendReliableCommandSize = 6
+	// SendUnreliableCommandSize is the wire size of a SendUnreliable command (without payload bytes).
+	SendUnreliableCommandSize = 8
+	// SendUnsequencedCommandSize is the wire size of a SendUnsequenced command (without payload bytes).
+	SendUnsequencedCommandSize = 8
+	// SendFragmentCommandSize is the wire size of a SendFragment / SendUnreliableFragment command (without payload bytes).
+	SendFragmentCommandSize = 24
+	// BandwidthLimitCommandSize is the wire size of a BandwidthLimit command.
+	BandwidthLimitCommandSize = 12
+	// ThrottleConfigureCommandSize is the wire size of a ThrottleConfigure command.
+	ThrottleConfigureCommandSize = 16
+	// ChecksumSize is the wire size of the optional checksum field appended to each datagram.
+	ChecksumSize = 4
 )
+
+// HeaderSize returns the packet header size depending on whether the sent-time
+// field is present.
+func HeaderSize(withSentTime bool) int {
+	if withSentTime {
+		return HeaderSizeWithSentTime
+	}
+	return HeaderSizeMinimal
+}

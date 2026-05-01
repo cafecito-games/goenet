@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"sync"
@@ -35,7 +36,6 @@ type Host struct {
 	config    Config
 	logger    *slog.Logger
 	localAddr net.Addr
-	socket    isocket.DatagramSocket
 	engine    *engine.Host
 	peers     map[*peer.Peer]*Peer
 	closed    atomic.Bool
@@ -115,7 +115,7 @@ func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, err
 		return nil, err
 	}
 
-	address, err := isocket.AddressFromUDPAddr(udpAddr)
+	address, err := core.AddressFromUDPAddr(udpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (h *Host) Flush(ctx context.Context) error {
 // are collected and returned together via errors.Join; a partial fanout still attempts
 // every peer rather than aborting on the first failure.
 func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
-	corePacket := toCorePacket(packet)
+	corePacket := copyPacketIn(packet)
 
 	if err := h.lockOpen(); err != nil {
 		return err
@@ -223,8 +223,10 @@ func (h *Host) Close() error {
 	}
 	h.closed.Store(true)
 
-	if err := h.socket.Close(); err != nil {
-		h.logger.Error("host close failed", "err", err)
+	if err := h.engine.Close(); err != nil {
+		// Caller is responsible for surfacing close errors to its observability
+		// stack; logging here would double-report. Keep the success-path Debug
+		// line so an operator still sees the lifecycle event.
 		return err
 	}
 
@@ -273,7 +275,6 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) (*Host, error) {
 	return &Host{
 		config:    normalized,
 		logger:    hostLogger,
-		socket:    sock,
 		engine:    engine.NewHost(coreCfg, sock, 0),
 		peers:     make(map[*peer.Peer]*Peer),
 		startTime: time.Now(),
@@ -285,12 +286,11 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) (*Host, error) {
 // ms with overflow-safe comparisons; anchoring on startTime keeps the value small
 // for the lifetime of the host while still tracking real elapsed time. After
 // ~49.7 days the counter wraps, which the timeutil overflow-safe helpers handle.
+//
+// time.Since uses the monotonic clock when startTime carries a monotonic reading
+// (which time.Now does), so the returned duration is always non-negative.
 func (h *Host) nowMs() uint32 {
-	elapsed := time.Since(h.startTime) / time.Millisecond
-	if elapsed < 0 {
-		return 0
-	}
-	return uint32(elapsed) //nolint:gosec // intentional uint32 wrap; ENet ms math is overflow-safe.
+	return uint32(time.Since(h.startTime) / time.Millisecond) //nolint:gosec // intentional uint32 wrap; ENet ms math is overflow-safe.
 }
 
 func cloneNetAddr(addr net.Addr) net.Addr {
@@ -334,14 +334,14 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 
 	if wrapped, ok := h.peers[raw]; ok {
 		wrapped.raw = raw
-		wrapped.state = fromCorePeerState(raw.State)
+		wrapped.state = raw.State
 		return wrapped
 	}
 
 	wrapped := &Peer{
 		host:  h,
 		raw:   raw,
-		state: fromCorePeerState(raw.State),
+		state: raw.State,
 	}
 	h.peers[raw] = wrapped
 	return wrapped
@@ -350,11 +350,11 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 func (h *Host) translateEvent(event engine.Event) Event {
 	wrapped := h.wrapPeer(event.Peer)
 	out := Event{
-		Type:      EventType(event.Type),
+		Type:      event.Type,
 		Peer:      wrapped,
 		ChannelID: event.ChannelID,
 		Data:      event.Data,
-		Packet:    fromCorePacket(event.Packet),
+		Packet:    event.Packet,
 	}
 	// After surfacing a terminal peer event, drop the wrapper from the map so a
 	// future re-use of the same engine peer slot allocates a fresh public Peer
@@ -374,8 +374,8 @@ func durationMillis(timeout time.Duration) uint32 {
 		return 0
 	}
 
-	if timeout/time.Millisecond >= time.Duration(^uint32(0)) {
-		return ^uint32(0)
+	if timeout/time.Millisecond >= time.Duration(math.MaxUint32) {
+		return math.MaxUint32
 	}
 
 	return uint32(timeout / time.Millisecond)

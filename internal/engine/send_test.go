@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"net/netip"
 	"strings"
@@ -356,29 +357,42 @@ func TestReliableSendRejectsFragmentationThatWouldWrapReliableSequenceSpace(t *t
 	}
 }
 
-func TestUnreliableSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
+func TestUnreliableSendFragmentsPacketsExceedingMTU(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
 	packet := &core.Packet{
-		Data: bytesOfLen(int(peer.Raw.MTU-9), 'x'),
+		Data: bytesOfLen(int(peer.Raw.MTU)+512, 'x'),
 	}
-	err := host.Send(peer.Raw, 0, packet)
-	if err == nil {
-		t.Fatal("expected oversize packet error")
+	if err := host.Send(peer.Raw, 0, packet); err != nil {
+		t.Fatalf("Send returned %v", err)
 	}
-	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := peer.OutgoingCount(); got != 0 {
-		t.Fatalf("OutgoingCount = %d", got)
+	if got := peer.OutgoingCount(); got < 2 {
+		t.Fatalf("OutgoingCount = %d, want >= 2 fragments", got)
 	}
 	if got := peer.SentReliableCount(); got != 0 {
 		t.Fatalf("SentReliableCount = %d", got)
 	}
 }
 
-func TestUnreliableSendUsesPeerMTUForValidation(t *testing.T) {
+func TestUnreliableSendRejectsUnsequencedPacketAboveMTU(t *testing.T) {
+	host, _ := newTestHost(t)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	packet := &core.Packet{
+		Data:  bytesOfLen(int(peer.Raw.MTU)+1, 'x'),
+		Flags: core.PacketFlagUnsequenced,
+	}
+	err := host.Send(peer.Raw, 0, packet)
+	if err == nil {
+		t.Fatal("expected oversize unsequenced error")
+	}
+	if !errors.Is(err, ErrNoFragmentation) {
+		t.Fatalf("error = %v, want ErrNoFragmentation", err)
+	}
+}
+
+func TestUnreliableSendRejectsTinyMTUTooSmallToFragment(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 	peer.Raw.MTU = 20
@@ -387,10 +401,10 @@ func TestUnreliableSendUsesPeerMTUForValidation(t *testing.T) {
 		Data: bytesOfLen(11, 'x'),
 	})
 	if err == nil {
-		t.Fatal("expected oversize packet error")
+		t.Fatal("expected fragmentation MTU error")
 	}
-	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
-		t.Fatalf("error = %v", err)
+	if !errors.Is(err, ErrNoFragmentation) {
+		t.Fatalf("error = %v, want ErrNoFragmentation", err)
 	}
 }
 
@@ -593,7 +607,7 @@ func TestFlushErrorsWhenQueuedCommandCannotFitWithinPeerMTU(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsendable command error")
 	}
-	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+	if !errors.Is(err, ErrCommandExceedsMTU) {
 		t.Fatalf("error = %v", err)
 	}
 	if got := sock.WriteCount(); got != 0 {
@@ -659,7 +673,7 @@ func TestFlushPreservesQueueStateWhenLaterQueuedCommandCannotFitWithinPeerMTU(t 
 	if err == nil {
 		t.Fatal("expected unsendable command error")
 	}
-	if !strings.Contains(err.Error(), "cannot fit within peer MTU") {
+	if !errors.Is(err, ErrCommandExceedsMTU) {
 		t.Fatalf("error = %v", err)
 	}
 	if got := sock.WriteCount(); got != 0 {

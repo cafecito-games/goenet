@@ -1,6 +1,8 @@
 package peer
 
 import (
+	"math"
+
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 )
@@ -11,6 +13,16 @@ const _ = uint(len(Peer{}.UnsequencedWindow)*32) - uint(protocol.UnsequencedWind
 const _ = uint(protocol.UnsequencedWindowSize) - uint(len(Peer{}.UnsequencedWindow)*32)
 
 // Peer carries the internal ENet-oriented state for a remote endpoint.
+//
+// Peer is intentionally treated by the engine as a struct-of-fields data layer
+// rather than as a fully encapsulated state machine: the engine reaches in to
+// increment sequence counters and update window state directly, because every
+// such mutation is paired with engine-side bookkeeping (RTT, throttle, bandwidth,
+// queue order) that does not factor cleanly through narrow accessor methods.
+// The methods that DO live on Peer are reserved for invariants that span more
+// than a single field — queue-and-index pairing for sent reliable commands,
+// waiting-data saturation arithmetic, queue resets — and the engine MUST go
+// through them rather than poking the underlying maps and queues itself.
 type Peer struct {
 	OutgoingReliableSequenceNumber uint16
 	OutgoingUnsequencedGroup       uint16
@@ -120,6 +132,23 @@ func (p *Peer) UnindexSentReliableCommand(cmd *OutgoingCommand) {
 	})
 }
 
+// ResetQueues clears the per-peer command queues, channel slice, and waiting-data
+// counter used during a Disconnect or DisconnectNow. Identity, address, MTU,
+// timing, throttle, and bandwidth fields are left intact so the engine can still
+// emit the outgoing disconnect command and continue retransmit/ack accounting
+// until the peer is fully zombified. Callers must remove the peer from any
+// host-level dispatch queue separately; that is engine-owned state.
+func (p *Peer) ResetQueues() {
+	p.Acknowledgements = acknowledgementQueue{}
+	p.OutgoingCommands = outgoingQueue{}
+	p.OutgoingSendReliableCommands = outgoingQueue{}
+	p.SentReliableCommands = outgoingQueue{}
+	p.sentReliableIndex = nil
+	p.DispatchedCommands = incomingQueue{}
+	p.Channels = nil
+	p.TotalWaitingData = 0
+}
+
 // CanQueueWaitingData reports whether another packet fits under the configured waiting-data cap.
 func (p *Peer) CanQueueWaitingData(length, maximumWaitingData uint32) bool {
 	if length > maximumWaitingData {
@@ -133,8 +162,8 @@ func (p *Peer) CanQueueWaitingData(length, maximumWaitingData uint32) bool {
 // math.MaxUint32 rather than wrapping. Callers should gate on CanQueueWaitingData
 // first; the saturation here defends against drift if that contract is missed.
 func (p *Peer) AddWaitingData(length uint32) {
-	if length > ^uint32(0)-p.TotalWaitingData {
-		p.TotalWaitingData = ^uint32(0)
+	if length > math.MaxUint32-p.TotalWaitingData {
+		p.TotalWaitingData = math.MaxUint32
 		return
 	}
 	p.TotalWaitingData += length

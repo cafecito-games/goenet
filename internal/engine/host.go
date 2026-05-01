@@ -4,15 +4,53 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"time"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/socket"
-	"github.com/cafecito-games/goenet/internal/timeutil"
+)
+
+// Sentinel errors returned by the engine. Public callers can match against
+// these via errors.Is, even when the engine wraps them with %w for context.
+var (
+	// ErrNilPeer is returned when a method requires a peer but receives nil.
+	ErrNilPeer = errors.New("engine: nil peer")
+	// ErrNilPacket is returned by Send when the caller passes a nil packet.
+	ErrNilPacket = errors.New("engine: nil packet")
+	// ErrPeerNotConnected is returned when a Send-style operation is invoked
+	// on a peer that is not in PeerStateConnected or PeerStateDisconnectLater.
+	ErrPeerNotConnected = errors.New("engine: peer not connected")
+	// ErrChannelOutOfRange is returned for channel IDs outside the peer's
+	// per-peer channel allocation.
+	ErrChannelOutOfRange = errors.New("engine: channel out of range")
+	// ErrPacketTooLarge is returned when a packet exceeds the host's
+	// configured MaximumPacketSize.
+	ErrPacketTooLarge = errors.New("engine: packet too large")
+	// ErrNoFreePeerSlot is returned by Connect when every peer slot is in use.
+	ErrNoFreePeerSlot = errors.New("engine: no disconnected peers available")
+	// ErrShortWrite is returned when the underlying socket reports a partial
+	// write of an outbound datagram.
+	ErrShortWrite = errors.New("engine: short write")
+	// ErrFragmentationLimit is returned when a reliable send would exceed the
+	// MaximumFragmentCount cap.
+	ErrFragmentationLimit = errors.New("engine: packet exceeds fragmentation limit")
+	// ErrNoFragmentation is returned when a packet exceeds the per-fragment
+	// data limit but cannot be fragmented (unsequenced flag, or peer MTU is
+	// too small to fit any per-fragment overhead).
+	ErrNoFragmentation = errors.New("engine: packet cannot be fragmented")
+	// ErrReliableSequenceExhausted is returned when the channel's outgoing
+	// reliable sequence space has insufficient room for the requested fragment
+	// train.
+	ErrReliableSequenceExhausted = errors.New("engine: reliable sequence space exhausted")
+	// ErrCommandExceedsMTU is returned by Flush when a queued command's wire
+	// size cannot fit into a single datagram given the negotiated peer MTU.
+	ErrCommandExceedsMTU = errors.New("engine: queued command exceeds peer mtu")
 )
 
 const (
@@ -92,8 +130,8 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 		serviceTime:   serviceTime,
 		dispatchSet:   make(map[*peer.Peer]struct{}),
 		runtime:       make(map[*peer.Peer]*peerRuntime),
-		nextConnectID: randomConnectIDSeed(),
-		sessionIDSeed: randomSessionIDSeed(),
+		nextConnectID: randomConnectIDSeed(cfg.Logger),
+		sessionIDSeed: randomSessionIDSeed(cfg.Logger),
 	}
 	for index := 0; index < cfg.PeerCount; index++ {
 		host.peers = append(host.peers, host.newPeerSlot(index))
@@ -106,6 +144,13 @@ func NewHost(config core.Config, sock socket.DatagramSocket, serviceTime uint32)
 // The returned slice aliases internal state and must be treated as read-only.
 func (h *Host) Peers() []*peer.Peer {
 	return h.peers
+}
+
+// Close releases the engine's underlying datagram socket. After Close the host
+// must not be used; subsequent Service/Flush calls will surface a closed-socket
+// error from the underlying I/O.
+func (h *Host) Close() error {
+	return h.socket.Close()
 }
 
 // SetServiceTime overrides the engine's millisecond clock to t. The public host
@@ -138,19 +183,19 @@ func (h *Host) AddPeer(addr core.Address, state core.PeerState) *peer.Peer {
 // Send queues one outbound packet for a connected peer channel.
 func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if packet == nil {
-		return fmt.Errorf("engine: nil packet")
+		return ErrNilPacket
 	}
 	if p.State != core.PeerStateConnected && p.State != core.PeerStateDisconnectLater {
-		return fmt.Errorf("engine: peer not connected")
+		return fmt.Errorf("%w: state %s", ErrPeerNotConnected, p.State)
 	}
 	if int(channelID) >= len(p.Channels) {
-		return fmt.Errorf("engine: channel %d out of range", channelID)
+		return fmt.Errorf("%w: %d", ErrChannelOutOfRange, channelID)
 	}
 	if len(packet.Data) > int(h.config.MaximumPacketSize) {
-		return fmt.Errorf("engine: packet too large: %d", len(packet.Data))
+		return fmt.Errorf("%w: %d bytes", ErrPacketTooLarge, len(packet.Data))
 	}
 
 	return h.queueOutgoingCommand(p, channelID, packet)
@@ -160,7 +205,7 @@ func (h *Host) Send(p *peer.Peer, channelID uint8, packet *core.Packet) error {
 // ctx scopes any synchronous flush triggered by an unsequenced disconnect.
 func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if p.State == core.PeerStateDisconnecting ||
 		p.State == core.PeerStateDisconnected ||
@@ -195,7 +240,7 @@ func (h *Host) Disconnect(ctx context.Context, p *peer.Peer, data uint32) error 
 // ctx scopes the synchronous flush of the disconnect command.
 func (h *Host) DisconnectNow(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if p.State == core.PeerStateDisconnected {
 		return nil
@@ -249,7 +294,7 @@ func (h *Host) queueDisconnectCommand(p *peer.Peer, data uint32, flags protocol.
 // DisconnectLater defers disconnect until the peer's outbound reliable work drains.
 func (h *Host) DisconnectLater(ctx context.Context, p *peer.Peer, data uint32) error {
 	if p == nil {
-		return fmt.Errorf("engine: nil peer")
+		return ErrNilPeer
 	}
 	if (p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater) && h.hasOutgoingCommands(p) {
 		h.runtime[p].eventData = data
@@ -289,7 +334,7 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 		}
 	}
 	if p == nil {
-		return nil, fmt.Errorf("engine: no disconnected peers available")
+		return nil, ErrNoFreePeerSlot
 	}
 
 	p = h.configurePeer(p, index, addr, core.PeerStateConnecting)
@@ -409,22 +454,30 @@ func (h *Host) nextPeerConnectID() uint32 {
 	return h.nextConnectID
 }
 
-// randomConnectIDSeed seeds the per-host connect ID counter from crypto/rand so
-// peers can disambiguate stale datagrams across host restarts. Failure to read
-// from the OS entropy source is non-fatal — the counter still produces unique
-// monotonic IDs within a single host lifetime.
-func randomConnectIDSeed() uint32 {
+// randomConnectIDSeed seeds the per-host connect ID counter so peers can
+// disambiguate stale datagrams across host restarts. crypto/rand is preferred;
+// if entropy is unavailable (e.g. a locked-down sandbox) it falls back to
+// nanosecond wall time so the counter still varies between consecutive starts.
+func randomConnectIDSeed(logger *slog.Logger) uint32 {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return 0
+		core.ComponentLogger(logger, "engine").Warn(
+			"connect id seed entropy unavailable, falling back to wall time",
+			"err", err,
+		)
+		return uint32(time.Now().UnixNano()) //nolint:gosec // intentional truncation; only mixes entropy.
 	}
 	return binary.BigEndian.Uint32(b[:])
 }
 
-func randomSessionIDSeed() uint8 {
+func randomSessionIDSeed(logger *slog.Logger) uint8 {
 	var b [1]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return 0
+		core.ComponentLogger(logger, "engine").Warn(
+			"session id seed entropy unavailable, falling back to wall time",
+			"err", err,
+		)
+		return uint8(time.Now().UnixNano()) % 3 //nolint:gosec // intentional truncation; mod-3 mix.
 	}
 	return b[0] % 3
 }
@@ -493,290 +546,6 @@ func verifyConnectWindowSize(hostIncoming uint32) uint32 {
 
 func (h *Host) hasOutgoingCommands(p *peer.Peer) bool {
 	return p.OutgoingCommands.Len() > 0 || p.OutgoingSendReliableCommands.Len() > 0 || p.SentReliableCommands.Len() > 0
-}
-
-// BandwidthLimit updates the host bandwidth caps and schedules peer recomputation.
-func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) {
-	h.incomingBandwidth = incomingBandwidth
-	h.outgoingBandwidth = outgoingBandwidth
-	h.recalculateBandwidthLimits = true
-}
-
-func (h *Host) updateNextTimeout(p *peer.Peer) {
-	front := p.SentReliableCommands.Front()
-	if front == nil {
-		p.NextTimeout = 0
-		return
-	}
-
-	cmd := front.Value()
-	p.NextTimeout = cmd.SentTime + cmd.RoundTripTimeout
-}
-
-func (h *Host) checkTimeouts() (Event, bool) {
-	for _, p := range h.peers {
-		if p == nil || p.State == core.PeerStateDisconnected || p.State == core.PeerStateZombie {
-			continue
-		}
-
-		current := p.SentReliableCommands.Front()
-		for current != nil {
-			elem := current
-			cmd := elem.Value()
-			current = current.Next()
-
-			if timeutil.Difference(h.serviceTime, cmd.SentTime) < cmd.RoundTripTimeout {
-				continue
-			}
-			if p.EarliestTimeout == 0 || timeutil.Less(cmd.SentTime, p.EarliestTimeout) {
-				p.EarliestTimeout = cmd.SentTime
-			}
-
-			attemptLimit := uint32(0)
-			if cmd.SendAttempts > 0 {
-				attemptLimit = uint32(1) << (cmd.SendAttempts - 1)
-			}
-			if p.EarliestTimeout != 0 &&
-				(timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMaximum ||
-					(attemptLimit >= p.TimeoutLimit &&
-						timeutil.Difference(h.serviceTime, p.EarliestTimeout) >= p.TimeoutMinimum)) {
-				h.logger.Info(
-					"peer disconnect timeout",
-					"peer_id", p.IncomingPeerID,
-					"state", p.State,
-					"send_attempts", cmd.SendAttempts,
-					"timeout_limit", p.TimeoutLimit,
-				)
-				return h.notifyDisconnectTimeout(p)
-			}
-
-			p.PacketsLost++
-			p.TotalPacketsLost++
-			cmd.RoundTripTimeout = p.RoundTripTime + 4*p.RoundTripTimeVariance
-
-			p.UnindexSentReliableCommand(cmd)
-			p.SentReliableCommands.Remove(elem)
-			h.logger.Debug(
-				"requeue timed out command",
-				"peer_id", p.IncomingPeerID,
-				"command", cmd.Command.Header.Command,
-				"send_attempts", cmd.SendAttempts,
-				"reliable_sequence_number", cmd.ReliableSequenceNumber,
-			)
-			if cmd.Packet != nil {
-				if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
-					p.ReliableDataInTransit = 0
-				} else {
-					p.ReliableDataInTransit -= uint32(cmd.FragmentLength)
-				}
-				p.OutgoingSendReliableCommands.InsertOrdered(cmd, lessOutgoingCommand)
-			} else {
-				p.OutgoingCommands.InsertOrdered(cmd, lessOutgoingCommand)
-			}
-		}
-
-		h.updateNextTimeout(p)
-	}
-
-	return Event{}, false
-}
-
-func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
-	if p.State >= core.PeerStateConnectionPending {
-		h.recalculateBandwidthLimits = true
-	}
-
-	if p.State != core.PeerStateConnecting && p.State < core.PeerStateConnectionSucceeded {
-		h.resetPeer(p)
-		return Event{}, false
-	}
-
-	event := Event{
-		Type: core.EventDisconnectTimeout,
-		Peer: p,
-	}
-	h.resetPeer(p)
-	return event, true
-}
-
-func (h *Host) bandwidthThrottle() error {
-	elapsedTime := h.serviceTime - h.bandwidthThrottleEpoch
-	if elapsedTime < defaultBandwidthThrottleInterval {
-		return nil
-	}
-	if h.outgoingBandwidth == 0 && h.incomingBandwidth == 0 {
-		return nil
-	}
-
-	h.bandwidthThrottleEpoch = h.serviceTime
-
-	peersRemaining := h.connectedPeerCount()
-	if peersRemaining == 0 {
-		return nil
-	}
-
-	dataTotal := ^uint32(0)
-	bandwidth := ^uint32(0)
-	throttle := uint32(0)
-	bandwidthLimit := uint32(0)
-	h.bandwidthLimitedPeers = h.bandwidthLimitedPeerCount()
-	needsAdjustment := h.bandwidthLimitedPeers > 0
-
-	if h.outgoingBandwidth != 0 {
-		dataTotal = 0
-		bandwidth = (h.outgoingBandwidth * elapsedTime) / 1000
-		for _, p := range h.peers {
-			if !isBandwidthThrottlePeer(p) {
-				continue
-			}
-			dataTotal += p.OutgoingDataTotal
-		}
-	}
-
-	for peersRemaining > 0 && needsAdjustment {
-		needsAdjustment = false
-		if dataTotal <= bandwidth {
-			throttle = packetThrottleScale
-		} else {
-			throttle = (bandwidth * packetThrottleScale) / dataTotal
-		}
-
-		for _, p := range h.peers {
-			if !isBandwidthThrottlePeer(p) || p.IncomingBandwidth == 0 || p.OutgoingBandwidthThrottleEpoch == h.serviceTime {
-				continue
-			}
-
-			peerBandwidth := (p.IncomingBandwidth * elapsedTime) / 1000
-			if (throttle*p.OutgoingDataTotal)/packetThrottleScale <= peerBandwidth {
-				continue
-			}
-
-			p.PacketThrottleLimit = (peerBandwidth * packetThrottleScale) / p.OutgoingDataTotal
-			if p.PacketThrottleLimit == 0 {
-				p.PacketThrottleLimit = 1
-			}
-			if p.PacketThrottle > p.PacketThrottleLimit {
-				p.PacketThrottle = p.PacketThrottleLimit
-			}
-			h.logger.Debug(
-				"peer throttle limited",
-				"peer_id", p.IncomingPeerID,
-				"packet_throttle_limit", p.PacketThrottleLimit,
-				"incoming_bandwidth", p.IncomingBandwidth,
-			)
-
-			p.OutgoingBandwidthThrottleEpoch = h.serviceTime
-			p.IncomingDataTotal = 0
-			p.OutgoingDataTotal = 0
-
-			needsAdjustment = true
-			peersRemaining--
-			bandwidth -= peerBandwidth
-			dataTotal -= peerBandwidth
-		}
-	}
-
-	if peersRemaining > 0 {
-		if dataTotal <= bandwidth {
-			throttle = packetThrottleScale
-		} else {
-			throttle = (bandwidth * packetThrottleScale) / dataTotal
-		}
-
-		for _, p := range h.peers {
-			if !isBandwidthThrottlePeer(p) || p.OutgoingBandwidthThrottleEpoch == h.serviceTime {
-				continue
-			}
-			p.PacketThrottleLimit = throttle
-			if p.PacketThrottle > p.PacketThrottleLimit {
-				p.PacketThrottle = p.PacketThrottleLimit
-			}
-			p.IncomingDataTotal = 0
-			p.OutgoingDataTotal = 0
-		}
-	}
-
-	if !h.recalculateBandwidthLimits {
-		return nil
-	}
-
-	h.recalculateBandwidthLimits = false
-	peersRemaining = h.connectedPeerCount()
-	bandwidth = h.incomingBandwidth
-	needsAdjustment = true
-	if bandwidth == 0 {
-		bandwidthLimit = 0
-	} else {
-		for peersRemaining > 0 && needsAdjustment {
-			needsAdjustment = false
-			bandwidthLimit = bandwidth / peersRemaining
-
-			for _, p := range h.peers {
-				if !isBandwidthThrottlePeer(p) || p.IncomingBandwidthThrottleEpoch == h.serviceTime {
-					continue
-				}
-				if p.OutgoingBandwidth > 0 && p.OutgoingBandwidth >= bandwidthLimit {
-					continue
-				}
-
-				p.IncomingBandwidthThrottleEpoch = h.serviceTime
-				needsAdjustment = true
-				peersRemaining--
-				bandwidth -= p.OutgoingBandwidth
-			}
-		}
-	}
-
-	for _, p := range h.peers {
-		if !isBandwidthThrottlePeer(p) {
-			continue
-		}
-
-		incomingLimit := bandwidthLimit
-		if p.IncomingBandwidthThrottleEpoch == h.serviceTime {
-			incomingLimit = p.OutgoingBandwidth
-		}
-
-		if err := h.queueOutgoingControlCommand(p, peer.Command{
-			Header: peer.Header{
-				Command:   protocol.CommandBandwidthLimit,
-				ChannelID: 0xFF,
-				Flags:     protocol.CommandFlagAcknowledge,
-			},
-			Payload: &protocol.BandwidthLimit{
-				IncomingBandwidth: incomingLimit,
-				OutgoingBandwidth: h.outgoingBandwidth,
-			},
-		}); err != nil {
-			return fmt.Errorf("engine: bandwidth limit broadcast: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (h *Host) connectedPeerCount() uint32 {
-	var count uint32
-	for _, p := range h.peers {
-		if isBandwidthThrottlePeer(p) {
-			count++
-		}
-	}
-	return count
-}
-
-func (h *Host) bandwidthLimitedPeerCount() uint32 {
-	var count uint32
-	for _, p := range h.peers {
-		if isBandwidthThrottlePeer(p) && p.IncomingBandwidth > 0 {
-			count++
-		}
-	}
-	return count
-}
-
-func isBandwidthThrottlePeer(p *peer.Peer) bool {
-	return p != nil && (p.State == core.PeerStateConnected || p.State == core.PeerStateDisconnectLater)
 }
 
 func lessOutgoingCommand(a, b *peer.OutgoingCommand) bool {

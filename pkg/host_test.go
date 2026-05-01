@@ -170,7 +170,7 @@ func TestCloseLogsHostLifecycleWithComponentTag(t *testing.T) {
 	}
 }
 
-func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
+func TestCloseReturnsSocketCloseFailureWithoutLogging(t *testing.T) {
 	handler := newCaptureHandler()
 	logger := slog.New(handler)
 	closeErr := errors.New("close failed")
@@ -192,18 +192,18 @@ func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
 		t.Fatalf("Close() error = %v, want %v", err, closeErr)
 	}
 
+	// Close failure must be surfaced to the caller, not double-reported via
+	// the logger. The "host closed" Debug line should also stay suppressed
+	// because the close path failed.
 	if handler.Contains(func(r capturedRecord) bool {
 		return r.Message == "host closed" && r.Attrs["component"] == "host"
 	}) {
 		t.Fatal("unexpected host closed log on close failure")
 	}
-
-	if !handler.Contains(func(r capturedRecord) bool {
-		return r.Message == "host close failed" &&
-			r.Attrs["component"] == "host" &&
-			errors.Is(attrError(r.Attrs["err"]), closeErr)
+	if handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "host close failed"
 	}) {
-		t.Fatal("missing host close failed log")
+		t.Fatal("close failure should not be logged; caller observes the returned error")
 	}
 }
 
@@ -1134,11 +1134,6 @@ func (s *blockingCloseSocket) Close() error {
 		close(s.releaseRead)
 	}
 	return nil
-}
-
-func attrError(v any) error {
-	err, _ := v.(error)
-	return err
 }
 
 type disconnectNowPeer interface {

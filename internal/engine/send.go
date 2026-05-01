@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	protocolHeaderSizeWithoutSentTime = 2
-	protocolHeaderSizeWithSentTime    = 4
-	sendReliableCommandSize           = 6
-	sendUnreliableCommandSize         = 8
-	sendUnsequencedCommandSize        = 8
-	sendFragmentCommandSize           = 24
+	protocolHeaderSizeWithoutSentTime = protocol.HeaderSizeMinimal
+	protocolHeaderSizeWithSentTime    = protocol.HeaderSizeWithSentTime
+	sendReliableCommandSize           = protocol.SendReliableCommandSize
+	sendUnreliableCommandSize         = protocol.SendUnreliableCommandSize
+	sendUnsequencedCommandSize        = protocol.SendUnsequencedCommandSize
+	sendFragmentCommandSize           = protocol.SendFragmentCommandSize
 	maximumDatagramsPerPeerFlush      = int(protocol.MaximumPacketCommands)
 )
 
@@ -130,8 +130,12 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 	if err := h.validatePacketSize(p, channelID, packet); err != nil {
 		return err
 	}
-	if shouldFragmentReliablePacket(p, packet, h.maxPacketDataLength(p, packet.Flags)) {
-		return h.queueOutgoingReliableFragments(p, channelID, packet)
+	maxPacketDataLength := h.maxPacketDataLength(p, packet.Flags)
+	if needsFragmentation(packet, maxPacketDataLength) {
+		if packet.Flags&core.PacketFlagReliable != 0 {
+			return h.queueOutgoingReliableFragments(p, channelID, packet)
+		}
+		return h.queueOutgoingUnreliableFragments(p, channelID, packet)
 	}
 
 	command := &peer.OutgoingCommand{
@@ -179,15 +183,53 @@ func (h *Host) queueOutgoingCommand(p *peer.Peer, channelID uint8, packet *core.
 	return h.setupAndQueueOutgoingCommand(p, command)
 }
 
-func shouldFragmentReliablePacket(_ *peer.Peer, packet *core.Packet, maxPacketDataLength int) bool {
-	return packet.Flags&core.PacketFlagReliable != 0 && len(packet.Data) > maxPacketDataLength
+// needsFragmentation reports whether the packet must be split into fragment
+// commands. ENet supports fragmentation for both reliable and (since the
+// CommandSendUnreliableFragment opcode was introduced) unreliable packets;
+// unsequenced packets are never fragmented.
+func needsFragmentation(packet *core.Packet, maxPacketDataLength int) bool {
+	if packet.Flags&core.PacketFlagUnsequenced != 0 && packet.Flags&core.PacketFlagReliable == 0 {
+		return false
+	}
+	return len(packet.Data) > maxPacketDataLength
 }
 
 func (h *Host) queueOutgoingReliableFragments(p *peer.Peer, channelID uint8, packet *core.Packet) error {
-	fragmentLength := h.maxReliableFragmentDataLength(p)
-	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
 	startSequenceNumber := p.Channels[channelID].OutgoingReliableSequenceNumber + 1
+	return h.queueOutgoingFragments(
+		p,
+		channelID,
+		packet,
+		protocol.CommandSendFragment,
+		protocol.CommandFlagAcknowledge,
+		startSequenceNumber,
+		h.maxReliableFragmentDataLength(p),
+	)
+}
 
+func (h *Host) queueOutgoingUnreliableFragments(p *peer.Peer, channelID uint8, packet *core.Packet) error {
+	startSequenceNumber := p.Channels[channelID].OutgoingUnreliableSequenceNumber + 1
+	return h.queueOutgoingFragments(
+		p,
+		channelID,
+		packet,
+		protocol.CommandSendUnreliableFragment,
+		0,
+		startSequenceNumber,
+		h.maxUnreliableFragmentDataLength(p),
+	)
+}
+
+func (h *Host) queueOutgoingFragments(
+	p *peer.Peer,
+	channelID uint8,
+	packet *core.Packet,
+	commandID protocol.Command,
+	flags protocol.CommandFlag,
+	startSequenceNumber uint16,
+	fragmentLength int,
+) error {
+	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
 	for fragmentNumber := 0; fragmentNumber < fragmentCount; fragmentNumber++ {
 		offset := fragmentNumber * fragmentLength
 		end := offset + fragmentLength
@@ -201,11 +243,14 @@ func (h *Host) queueOutgoingReliableFragments(p *peer.Peer, channelID uint8, pac
 			Packet:         packet,
 			Command: peer.Command{
 				Header: peer.Header{
-					Command:   protocol.CommandSendFragment,
+					Command:   commandID,
 					ChannelID: channelID,
-					Flags:     protocol.CommandFlagAcknowledge,
+					Flags:     flags,
 				},
 				Payload: &protocol.SendFragment{
+					Header: protocol.CommandHeader{
+						Command: commandID,
+					},
 					StartSequenceNumber: startSequenceNumber,
 					FragmentCount:       checkedUint32FromInt(fragmentCount),
 					FragmentNumber:      checkedUint32FromInt(fragmentNumber),
@@ -245,7 +290,8 @@ func (h *Host) Flush(ctx context.Context) error {
 	for _, p := range h.peers {
 		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
 			return fmt.Errorf(
-				"engine: queued command %d cannot fit within peer MTU %d",
+				"%w: command %d, peer mtu %d",
+				ErrCommandExceedsMTU,
 				blocked.Command.Header.Command,
 				p.MTU,
 			)
@@ -269,7 +315,7 @@ func (h *Host) Flush(ctx context.Context) error {
 				return err
 			}
 			if n != len(datagram.payload) {
-				return fmt.Errorf("engine: short write: wrote %d of %d", n, len(datagram.payload))
+				return fmt.Errorf("%w: wrote %d of %d", ErrShortWrite, n, len(datagram.payload))
 			}
 
 			h.commitPreparedDatagram(p, datagram)
@@ -305,7 +351,8 @@ func (h *Host) preparePeerDatagram(p *peer.Peer) (preparedDatagram, bool, error)
 	selected, blocked := h.selectOutgoingBatch(p)
 	if blocked != nil {
 		return preparedDatagram{}, false, fmt.Errorf(
-			"engine: queued command %d cannot fit within peer MTU %d",
+			"%w: command %d, peer mtu %d",
+			ErrCommandExceedsMTU,
 			blocked.command.Command.Header.Command,
 			p.MTU,
 		)
@@ -513,8 +560,12 @@ func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand, withChecksum bo
 }
 
 func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
+	// Command is set explicitly here so the wire encoding is fully determined
+	// by the constructed value; we no longer depend on protocol.Acknowledge's
+	// MarshalBinary patching the command byte at serialization time.
 	return protocol.Acknowledge{
 		Header: protocol.CommandHeader{
+			Command:                protocol.CommandAcknowledge,
 			ChannelID:              ack.Command.Header.ChannelID,
 			ReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
 		},
@@ -524,26 +575,32 @@ func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
 }
 
 func (h *Host) validatePacketSize(p *peer.Peer, channelID uint8, packet *core.Packet) error {
-	if packet.Flags&core.PacketFlagReliable == 0 && len(packet.Data) > math.MaxUint16 {
-		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
-	}
 	maxPacketDataLength := h.maxPacketDataLength(p, packet.Flags)
 	if len(packet.Data) <= maxPacketDataLength {
 		return nil
 	}
-	if packet.Flags&core.PacketFlagReliable == 0 {
-		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+	// Unsequenced packets cannot be fragmented (no per-fragment ordering anchor),
+	// so they must fit within a single command body.
+	if packet.Flags&core.PacketFlagUnsequenced != 0 && packet.Flags&core.PacketFlagReliable == 0 {
+		return fmt.Errorf("%w: unsequenced %d-byte packet exceeds limit", ErrNoFragmentation, len(packet.Data))
 	}
-	fragmentLength := h.maxReliableFragmentDataLength(p)
+
+	var fragmentLength int
+	reliable := packet.Flags&core.PacketFlagReliable != 0
+	if reliable {
+		fragmentLength = h.maxReliableFragmentDataLength(p)
+	} else {
+		fragmentLength = h.maxUnreliableFragmentDataLength(p)
+	}
 	if fragmentLength <= 0 {
-		return fmt.Errorf("engine: packet exceeds no-fragmentation limit: %d", len(packet.Data))
+		return fmt.Errorf("%w: peer mtu %d too small to fragment %d-byte packet", ErrNoFragmentation, p.MTU, len(packet.Data))
 	}
 	fragmentCount := fragmentCountForLength(len(packet.Data), fragmentLength)
 	if fragmentCount > int(protocolMaximumFragmentCount) {
-		return fmt.Errorf("engine: packet exceeds fragmentation limit: %d", len(packet.Data))
+		return fmt.Errorf("%w: %d-byte packet would need %d fragments", ErrFragmentationLimit, len(packet.Data), fragmentCount)
 	}
-	if fragmentCount > remainingReliableSequenceSpace(p, channelID) {
-		return fmt.Errorf("engine: reliable sequence space exhausted for fragmented send")
+	if reliable && fragmentCount > remainingReliableSequenceSpace(p, channelID) {
+		return fmt.Errorf("%w: reliable sequence space exhausted for fragmented send", ErrReliableSequenceExhausted)
 	}
 
 	return nil
@@ -580,6 +637,18 @@ func (h *Host) maxReliableFragmentDataLength(p *peer.Peer) int {
 	return int(p.MTU) - overhead
 }
 
+func (h *Host) maxUnreliableFragmentDataLength(p *peer.Peer) int {
+	// Unreliable fragments share the same wire layout but ride in a datagram
+	// without the sent-time header, since unreliable commands do not require
+	// acknowledgement.
+	overhead := headerOverhead(false, h.config.Checksum != nil) + sendFragmentCommandSize
+	if p.MTU <= checkedUint32FromInt(overhead) {
+		return 0
+	}
+
+	return int(p.MTU) - overhead
+}
+
 func (h *Host) setupAndQueueOutgoingCommand(p *peer.Peer, command *peer.OutgoingCommand) error {
 	if err := h.prepareOutgoingCommand(p, command); err != nil {
 		return err
@@ -597,7 +666,7 @@ func (h *Host) setupAndQueueOutgoingCommand(p *peer.Peer, command *peer.Outgoing
 func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingCommand) error {
 	channelID := command.Command.Header.ChannelID
 	if channelID != 0xFF && int(channelID) >= len(p.Channels) {
-		return fmt.Errorf("engine: channel %d out of range", channelID)
+		return fmt.Errorf("%w: %d", ErrChannelOutOfRange, channelID)
 	}
 
 	var reliable, unreliable uint16
@@ -614,7 +683,12 @@ func (h *Host) prepareOutgoingCommand(p *peer.Peer, command *peer.OutgoingComman
 		p.OutgoingUnsequencedGroup++
 	default:
 		channel := p.Channels[channelID]
-		channel.OutgoingUnreliableSequenceNumber++
+		// Match enet.h:4174-4176: only the first fragment of an unreliable packet
+		// gets a fresh unreliable sequence number; later fragments share it so the
+		// receiver's reassembly anchor sees them as one logical packet.
+		if command.FragmentOffset == 0 {
+			channel.OutgoingUnreliableSequenceNumber++
+		}
 		reliable = channel.OutgoingReliableSequenceNumber
 		unreliable = channel.OutgoingUnreliableSequenceNumber
 	}

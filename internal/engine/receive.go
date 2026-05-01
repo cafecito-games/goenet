@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -132,6 +133,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 
 	header, ok := parseHeader(payload)
 	if !ok {
+		h.logger.Debug("datagram rejected", "reason", "parse_header", "len", len(payload), "addr", addr.AddrPort())
 		return nil
 	}
 
@@ -144,11 +146,19 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		offset += 4
 	}
 	if offset > len(payload) {
+		h.logger.Debug("datagram rejected", "reason", "header_overflow", "len", len(payload), "addr", addr.AddrPort())
 		return nil
 	}
 
 	currentPeer, ok := h.lookupPeer(header, addr)
 	if !ok {
+		h.logger.Debug(
+			"datagram rejected",
+			"reason", "peer_lookup",
+			"peer_id", header.PeerID,
+			"session_id", header.SessionID,
+			"addr", addr.AddrPort(),
+		)
 		return nil
 	}
 	if currentPeer != nil {
@@ -163,15 +173,18 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	workingPayload := payload
 	if header.Flags&protocol.HeaderFlagCompressed != 0 {
 		if h.config.Compressor == nil {
+			h.logger.Debug("datagram rejected", "reason", "compressed_without_compressor", "addr", addr.AddrPort())
 			return nil
 		}
 		outLimit := int(h.config.MTU) - offset
 		if outLimit <= 0 {
+			h.logger.Debug("datagram rejected", "reason", "decompress_buffer_zero", "addr", addr.AddrPort())
 			return nil
 		}
 		decompressed := make([]byte, outLimit)
 		n, ok := decompressPayload(h.config.Compressor, payload[offset:], decompressed)
 		if !ok {
+			h.logger.Debug("datagram rejected", "reason", "decompress_failed", "addr", addr.AddrPort())
 			return nil
 		}
 
@@ -187,6 +200,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		desired := binary.LittleEndian.Uint32(workingPayload[checksumOffset : checksumOffset+4])
 		binary.LittleEndian.PutUint32(workingPayload[checksumOffset:checksumOffset+4], incomingChecksumSeed(currentPeer))
 		if h.config.Checksum.Checksum([][]byte{workingPayload}) != desired {
+			h.logger.Debug("datagram rejected", "reason", "checksum_mismatch", "addr", addr.AddrPort())
 			return nil
 		}
 	}
@@ -194,18 +208,30 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	for offset < len(workingPayload) {
 		command, used, ok := parseCommand(workingPayload[offset:])
 		if !ok {
+			h.logger.Debug("datagram rejected", "reason", "parse_command", "addr", addr.AddrPort())
 			return nil
 		}
 		offset += used
 
 		if currentPeer == nil {
 			if _, ok := command.(protocol.Connect); !ok || offset != len(workingPayload) {
+				h.logger.Debug(
+					"datagram rejected",
+					"reason", "non_connect_without_peer",
+					"addr", addr.AddrPort(),
+				)
 				return nil
 			}
 		}
 
 		disposition := h.handleIncomingCommand(header, &currentPeer, command, addr)
 		if disposition == inboundReject {
+			h.logger.Debug(
+				"datagram aborted",
+				"reason", "command_rejected",
+				"command", commandHeader(command).Command,
+				"addr", addr.AddrPort(),
+			)
 			return nil
 		}
 
@@ -214,6 +240,12 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 			continue
 		}
 		if header.Flags&protocol.HeaderFlagSentTime == 0 {
+			h.logger.Debug(
+				"datagram rejected",
+				"reason", "ack_without_sent_time",
+				"command", acknowledgeHeader.Command,
+				"addr", addr.AddrPort(),
+			)
 			return nil
 		}
 
@@ -262,7 +294,10 @@ func (h *Host) handleIncomingCommand(
 		if h.handleAcknowledge(*currentPeer, cmd) {
 			return inboundAccept
 		}
-		return inboundReject
+		// A malformed-but-recoverable ACK (out-of-window timestamp, mismatched
+		// connect-state command code) must not abort the rest of the datagram —
+		// later commands in the same packet are still valid.
+		return inboundIgnore
 	case protocol.Connect:
 		if *currentPeer != nil {
 			return inboundReject
@@ -335,7 +370,28 @@ func (h *Host) handleIncomingCommand(
 
 func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.Peer {
 	if command.ChannelCount < protocol.MinimumChannelCount || command.ChannelCount > protocol.MaximumChannelCount {
+		h.logger.Debug("connect rejected", "reason", "channel_count_out_of_range", "channel_count", command.ChannelCount)
 		return nil
+	}
+
+	// Match enet_protocol_handle_connect (enet.h:1855-1866): if a peer already
+	// exists for this (address, connectID) tuple in any non-terminal state, the
+	// incoming Connect is a retransmit and must not allocate a new slot.
+	for _, candidate := range h.peers {
+		if candidate == nil {
+			continue
+		}
+		if candidate.State == core.PeerStateDisconnected || candidate.State == core.PeerStateZombie {
+			continue
+		}
+		if candidate.Address == addr && candidate.ConnectID == command.ConnectID {
+			h.logger.Debug(
+				"connect ignored as duplicate",
+				"peer_id", candidate.IncomingPeerID,
+				"connect_id", candidate.ConnectID,
+			)
+			return nil
+		}
 	}
 
 	var selected *peer.Peer
@@ -346,6 +402,7 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 		}
 	}
 	if selected == nil {
+		h.logger.Debug("connect rejected", "reason", "no_peer_slot")
 		return nil
 	}
 
@@ -549,12 +606,14 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 		h.resetPeer(p)
 	}
 
-	h.logger.Debug(
-		"peer disconnect transition",
-		"peer_id", p.IncomingPeerID,
-		"from_state", previousState.String(),
-		"to_state", p.State.String(),
-	)
+	if h.logger.Enabled(context.Background(), slog.LevelDebug) {
+		h.logger.Debug(
+			"peer disconnect transition",
+			"peer_id", p.IncomingPeerID,
+			"from_state", previousState.String(),
+			"to_state", p.State.String(),
+		)
+	}
 
 	return inboundAccept
 }
@@ -912,6 +971,24 @@ func (h *Host) dispatchReliableCommands(p *peer.Peer, channel *peer.Channel) {
 }
 
 func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
+	// Two passes mirror enet_protocol_dispatch_incoming_unreliable_commands:
+	// pass 1 prunes anything stranded behind an advanced reliable anchor so the
+	// dispatch pass sees a clean head, pass 2 walks consecutive in-order entries
+	// until the first ineligible one. Mixing drop and dispatch in a single loop
+	// can leave droppable items behind a head that halts dispatch on an
+	// incomplete fragment train.
+	for elem := channel.IncomingUnreliableCommands.Front(); elem != nil; {
+		cmd := elem.Value()
+		next := elem.Next()
+		if cmd.Command.Header.Command != protocol.CommandSendUnsequenced && shouldDropUnreliable(channel, cmd) {
+			channel.IncomingUnreliableCommands.Remove(elem)
+			if cmd.Packet != nil {
+				p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
+			}
+		}
+		elem = next
+	}
+
 	moved := false
 	for {
 		front := channel.IncomingUnreliableCommands.Front()
@@ -923,14 +1000,6 @@ func (h *Host) dispatchUnreliableCommands(p *peer.Peer, channel *peer.Channel) {
 			channel.IncomingUnreliableCommands.Remove(front)
 			p.QueueDispatchedCommand(cmd)
 			moved = true
-			continue
-		}
-
-		if shouldDropUnreliable(channel, cmd) {
-			channel.IncomingUnreliableCommands.Remove(front)
-			if cmd.Packet != nil {
-				p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
-			}
 			continue
 		}
 		if cmd.ReliableSequenceNumber != channel.IncomingReliableSequenceNumber || !cmd.IsComplete() {
@@ -980,7 +1049,15 @@ func (h *Host) dispatchEvent() (Event, bool) {
 			}, true
 		case core.PeerStateConnected:
 			cmd := p.PopDispatchedCommand()
-			if cmd == nil || cmd.Packet == nil {
+			if cmd == nil {
+				continue
+			}
+			// Nil-packet entries should not exist on the dispatch queue (every
+			// queueing path constructs a packet); if one ever lands here, log
+			// loudly and skip so the caller does not see EventReceive with a
+			// nil Packet, but otherwise treat it as zero waiting bytes.
+			if cmd.Packet == nil {
+				h.logger.Warn("dispatch dropped nil-packet receive", "peer_id", p.IncomingPeerID)
 				continue
 			}
 			p.ReleaseWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)))
@@ -1048,112 +1125,39 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 	} else {
 		p.State = core.PeerStateConnectionPending
 	}
-	h.logger.Debug(
-		"peer connect transition",
-		"peer_id", p.IncomingPeerID,
-		"from_state", previousState.String(),
-		"to_state", p.State.String(),
-	)
+	if h.logger.Enabled(context.Background(), slog.LevelDebug) {
+		h.logger.Debug(
+			"peer connect transition",
+			"peer_id", p.IncomingPeerID,
+			"from_state", previousState.String(),
+			"to_state", p.State.String(),
+		)
+	}
 	h.enqueuePeerDispatch(p)
 }
 
 func (h *Host) clearPeerQueues(p *peer.Peer) {
-	state := p.State
-	incomingPeerID := p.IncomingPeerID
-	outgoingPeerID := p.OutgoingPeerID
-	connectID := p.ConnectID
-	outgoingSessionID := p.OutgoingSessionID
-	incomingSessionID := p.IncomingSessionID
-	mtu := p.MTU
-	address := p.Address
-	incomingBandwidth := p.IncomingBandwidth
-	outgoingBandwidth := p.OutgoingBandwidth
-	incomingDataTotal := p.IncomingDataTotal
-	outgoingDataTotal := p.OutgoingDataTotal
-	incomingBandwidthThrottleEpoch := p.IncomingBandwidthThrottleEpoch
-	outgoingBandwidthThrottleEpoch := p.OutgoingBandwidthThrottleEpoch
-	lastSendTime := p.LastSendTime
-	lastReceiveTime := p.LastReceiveTime
-	nextTimeout := p.NextTimeout
-	earliestTimeout := p.EarliestTimeout
-	packetsLost := p.PacketsLost
-	totalPacketsLost := p.TotalPacketsLost
-	packetThrottle := p.PacketThrottle
-	packetThrottleLimit := p.PacketThrottleLimit
-	packetThrottleCounter := p.PacketThrottleCounter
-	packetThrottleEpoch := p.PacketThrottleEpoch
-	packetThrottleAcceleration := p.PacketThrottleAcceleration
-	packetThrottleDeceleration := p.PacketThrottleDeceleration
-	packetThrottleInterval := p.PacketThrottleInterval
-	timeoutLimit := p.TimeoutLimit
-	timeoutMinimum := p.TimeoutMinimum
-	timeoutMaximum := p.TimeoutMaximum
-	lastRoundTripTime := p.LastRoundTripTime
-	lowestRoundTripTime := p.LowestRoundTripTime
-	lastRoundTripTimeVariance := p.LastRoundTripTimeVariance
-	highestRoundTripTimeVariance := p.HighestRoundTripTimeVariance
-	roundTripTime := p.RoundTripTime
-	roundTripTimeVariance := p.RoundTripTimeVariance
-	reliableDataInTransit := p.ReliableDataInTransit
-	outgoingReliableSequenceNumber := p.OutgoingReliableSequenceNumber
-	outgoingUnsequencedGroup := p.OutgoingUnsequencedGroup
-	incomingUnsequencedGroup := p.IncomingUnsequencedGroup
-	unsequencedWindow := p.UnsequencedWindow
-
 	h.removePeerDispatch(p)
-	*p = peer.Peer{
-		OutgoingReliableSequenceNumber: outgoingReliableSequenceNumber,
-		OutgoingUnsequencedGroup:       outgoingUnsequencedGroup,
-		OutgoingPeerID:                 outgoingPeerID,
-		IncomingPeerID:                 incomingPeerID,
-		ConnectID:                      connectID,
-		OutgoingSessionID:              outgoingSessionID,
-		IncomingSessionID:              incomingSessionID,
-		MTU:                            mtu,
-		Address:                        address,
-		State:                          state,
-		IncomingBandwidth:              incomingBandwidth,
-		OutgoingBandwidth:              outgoingBandwidth,
-		IncomingDataTotal:              incomingDataTotal,
-		OutgoingDataTotal:              outgoingDataTotal,
-		IncomingBandwidthThrottleEpoch: incomingBandwidthThrottleEpoch,
-		OutgoingBandwidthThrottleEpoch: outgoingBandwidthThrottleEpoch,
-		LastSendTime:                   lastSendTime,
-		LastReceiveTime:                lastReceiveTime,
-		NextTimeout:                    nextTimeout,
-		EarliestTimeout:                earliestTimeout,
-		PacketsLost:                    packetsLost,
-		TotalPacketsLost:               totalPacketsLost,
-		PacketThrottle:                 packetThrottle,
-		PacketThrottleLimit:            packetThrottleLimit,
-		PacketThrottleCounter:          packetThrottleCounter,
-		PacketThrottleEpoch:            packetThrottleEpoch,
-		PacketThrottleAcceleration:     packetThrottleAcceleration,
-		PacketThrottleDeceleration:     packetThrottleDeceleration,
-		PacketThrottleInterval:         packetThrottleInterval,
-		TimeoutLimit:                   timeoutLimit,
-		TimeoutMinimum:                 timeoutMinimum,
-		TimeoutMaximum:                 timeoutMaximum,
-		LastRoundTripTime:              lastRoundTripTime,
-		LowestRoundTripTime:            lowestRoundTripTime,
-		LastRoundTripTimeVariance:      lastRoundTripTimeVariance,
-		HighestRoundTripTimeVariance:   highestRoundTripTimeVariance,
-		RoundTripTime:                  roundTripTime,
-		RoundTripTimeVariance:          roundTripTimeVariance,
-		ReliableDataInTransit:          reliableDataInTransit,
-		IncomingUnsequencedGroup:       incomingUnsequencedGroup,
-		UnsequencedWindow:              unsequencedWindow,
-	}
+	p.ResetQueues()
 }
 
 func (h *Host) resetPeer(p *peer.Peer) {
 	incomingPeerID := p.IncomingPeerID
 	connectID := p.ConnectID
+	previousState := p.State
 
 	h.removePeerDispatch(p)
 	h.initializePeer(p, int(incomingPeerID), core.Address{}, core.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
 	p.ConnectID = connectID
 	h.runtime[p] = defaultPeerRuntime()
+
+	if previousState != core.PeerStateDisconnected {
+		h.logger.Info(
+			"peer reset",
+			"peer_id", incomingPeerID,
+			"from_state", previousState.String(),
+		)
+	}
 }
 
 func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader, sentTime uint16) {
@@ -1228,25 +1232,29 @@ func (h *Host) removeSentReliableCommand(p *peer.Peer, reliableSequenceNumber ui
 	return protocol.CommandNone
 }
 
-func peerThrottle(p *peer.Peer, roundTripTime uint32) int {
+// peerThrottle adjusts the peer's packet-throttle counter based on the latest
+// round-trip sample, mirroring enet_peer_throttle. The C version returns a
+// direction code (-1/0/1) that no current call site uses, so this Go port
+// returns nothing.
+func peerThrottle(p *peer.Peer, roundTripTime uint32) {
 	if p.LastRoundTripTime <= p.LastRoundTripTimeVariance {
 		p.PacketThrottle = p.PacketThrottleLimit
-	} else if roundTripTime <= p.LastRoundTripTime {
+		return
+	}
+	if roundTripTime <= p.LastRoundTripTime {
 		p.PacketThrottle += p.PacketThrottleAcceleration
 		if p.PacketThrottle > p.PacketThrottleLimit {
 			p.PacketThrottle = p.PacketThrottleLimit
 		}
-		return 1
-	} else if roundTripTime > p.LastRoundTripTime+2*p.LastRoundTripTimeVariance {
+		return
+	}
+	if roundTripTime > p.LastRoundTripTime+2*p.LastRoundTripTimeVariance {
 		if p.PacketThrottle > p.PacketThrottleDeceleration {
 			p.PacketThrottle -= p.PacketThrottleDeceleration
 		} else {
 			p.PacketThrottle = 0
 		}
-		return -1
 	}
-
-	return 0
 }
 
 func (h *Host) findReliableFragmentCommand(channel *peer.Channel, startSequence uint16) *peer.IncomingCommand {
