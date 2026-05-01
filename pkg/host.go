@@ -224,7 +224,9 @@ func (h *Host) Close() error {
 	h.closed.Store(true)
 
 	if err := h.socket.Close(); err != nil {
-		h.logger.Error("host close failed", "err", err)
+		// Caller is responsible for surfacing close errors to its observability
+		// stack; logging here would double-report. Keep the success-path Debug
+		// line so an operator still sees the lifecycle event.
 		return err
 	}
 

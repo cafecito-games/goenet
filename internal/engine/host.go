@@ -565,13 +565,15 @@ func (h *Host) checkTimeouts() (Event, bool) {
 
 			p.UnindexSentReliableCommand(cmd)
 			p.SentReliableCommands.Remove(elem)
-			h.logger.Debug(
-				"requeue timed out command",
-				"peer_id", p.IncomingPeerID,
-				"command", cmd.Command.Header.Command,
-				"send_attempts", cmd.SendAttempts,
-				"reliable_sequence_number", cmd.ReliableSequenceNumber,
-			)
+			if h.logger.Enabled(context.Background(), slog.LevelDebug) {
+				h.logger.Debug(
+					"requeue timed out command",
+					"peer_id", p.IncomingPeerID,
+					"command", cmd.Command.Header.Command,
+					"send_attempts", cmd.SendAttempts,
+					"reliable_sequence_number", cmd.ReliableSequenceNumber,
+				)
+			}
 			if cmd.Packet != nil {
 				if uint32(cmd.FragmentLength) >= p.ReliableDataInTransit {
 					p.ReliableDataInTransit = 0

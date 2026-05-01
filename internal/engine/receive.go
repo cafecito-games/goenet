@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
@@ -132,6 +133,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 
 	header, ok := parseHeader(payload)
 	if !ok {
+		h.logger.Debug("datagram rejected", "reason", "parse_header", "len", len(payload), "addr", addr.AddrPort())
 		return nil
 	}
 
@@ -144,11 +146,19 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		offset += 4
 	}
 	if offset > len(payload) {
+		h.logger.Debug("datagram rejected", "reason", "header_overflow", "len", len(payload), "addr", addr.AddrPort())
 		return nil
 	}
 
 	currentPeer, ok := h.lookupPeer(header, addr)
 	if !ok {
+		h.logger.Debug(
+			"datagram rejected",
+			"reason", "peer_lookup",
+			"peer_id", header.PeerID,
+			"session_id", header.SessionID,
+			"addr", addr.AddrPort(),
+		)
 		return nil
 	}
 	if currentPeer != nil {
@@ -163,15 +173,18 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	workingPayload := payload
 	if header.Flags&protocol.HeaderFlagCompressed != 0 {
 		if h.config.Compressor == nil {
+			h.logger.Debug("datagram rejected", "reason", "compressed_without_compressor", "addr", addr.AddrPort())
 			return nil
 		}
 		outLimit := int(h.config.MTU) - offset
 		if outLimit <= 0 {
+			h.logger.Debug("datagram rejected", "reason", "decompress_buffer_zero", "addr", addr.AddrPort())
 			return nil
 		}
 		decompressed := make([]byte, outLimit)
 		n, ok := decompressPayload(h.config.Compressor, payload[offset:], decompressed)
 		if !ok {
+			h.logger.Debug("datagram rejected", "reason", "decompress_failed", "addr", addr.AddrPort())
 			return nil
 		}
 
@@ -187,6 +200,7 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		desired := binary.LittleEndian.Uint32(workingPayload[checksumOffset : checksumOffset+4])
 		binary.LittleEndian.PutUint32(workingPayload[checksumOffset:checksumOffset+4], incomingChecksumSeed(currentPeer))
 		if h.config.Checksum.Checksum([][]byte{workingPayload}) != desired {
+			h.logger.Debug("datagram rejected", "reason", "checksum_mismatch", "addr", addr.AddrPort())
 			return nil
 		}
 	}
@@ -194,18 +208,30 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 	for offset < len(workingPayload) {
 		command, used, ok := parseCommand(workingPayload[offset:])
 		if !ok {
+			h.logger.Debug("datagram rejected", "reason", "parse_command", "addr", addr.AddrPort())
 			return nil
 		}
 		offset += used
 
 		if currentPeer == nil {
 			if _, ok := command.(protocol.Connect); !ok || offset != len(workingPayload) {
+				h.logger.Debug(
+					"datagram rejected",
+					"reason", "non_connect_without_peer",
+					"addr", addr.AddrPort(),
+				)
 				return nil
 			}
 		}
 
 		disposition := h.handleIncomingCommand(header, &currentPeer, command, addr)
 		if disposition == inboundReject {
+			h.logger.Debug(
+				"datagram aborted",
+				"reason", "command_rejected",
+				"command", commandHeader(command).Command,
+				"addr", addr.AddrPort(),
+			)
 			return nil
 		}
 
@@ -214,6 +240,12 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 			continue
 		}
 		if header.Flags&protocol.HeaderFlagSentTime == 0 {
+			h.logger.Debug(
+				"datagram rejected",
+				"reason", "ack_without_sent_time",
+				"command", acknowledgeHeader.Command,
+				"addr", addr.AddrPort(),
+			)
 			return nil
 		}
 
@@ -574,12 +606,14 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 		h.resetPeer(p)
 	}
 
-	h.logger.Debug(
-		"peer disconnect transition",
-		"peer_id", p.IncomingPeerID,
-		"from_state", previousState.String(),
-		"to_state", p.State.String(),
-	)
+	if h.logger.Enabled(context.Background(), slog.LevelDebug) {
+		h.logger.Debug(
+			"peer disconnect transition",
+			"peer_id", p.IncomingPeerID,
+			"from_state", previousState.String(),
+			"to_state", p.State.String(),
+		)
+	}
 
 	return inboundAccept
 }
@@ -1091,12 +1125,14 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 	} else {
 		p.State = core.PeerStateConnectionPending
 	}
-	h.logger.Debug(
-		"peer connect transition",
-		"peer_id", p.IncomingPeerID,
-		"from_state", previousState.String(),
-		"to_state", p.State.String(),
-	)
+	if h.logger.Enabled(context.Background(), slog.LevelDebug) {
+		h.logger.Debug(
+			"peer connect transition",
+			"peer_id", p.IncomingPeerID,
+			"from_state", previousState.String(),
+			"to_state", p.State.String(),
+		)
+	}
 	h.enqueuePeerDispatch(p)
 }
 
@@ -1108,11 +1144,20 @@ func (h *Host) clearPeerQueues(p *peer.Peer) {
 func (h *Host) resetPeer(p *peer.Peer) {
 	incomingPeerID := p.IncomingPeerID
 	connectID := p.ConnectID
+	previousState := p.State
 
 	h.removePeerDispatch(p)
 	h.initializePeer(p, int(incomingPeerID), core.Address{}, core.PeerStateDisconnected, protocolMaximumPeerID, 0xFF, 0xFF)
 	p.ConnectID = connectID
 	h.runtime[p] = defaultPeerRuntime()
+
+	if previousState != core.PeerStateDisconnected {
+		h.logger.Info(
+			"peer reset",
+			"peer_id", incomingPeerID,
+			"from_state", previousState.String(),
+		)
+	}
 }
 
 func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader, sentTime uint16) {

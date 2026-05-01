@@ -402,13 +402,22 @@ func ParseCommand(src []byte) (PacketCommand, CommandFlag, int, error) {
 }
 
 // payloadSize16 narrows a payload byte count to the 16-bit on-wire length field.
-// Callers in the engine fragment outbound packets to <MTU before reaching marshal,
-// so n cannot legitimately exceed math.MaxUint16; an overflow here indicates a
-// programmer error in the caller (e.g. skipping fragmentation), not a wire-format
-// failure, hence the panic rather than a returned error.
+//
+// The engine's outbound path enforces this bound before reaching MarshalBinary:
+//   - Send paths run validatePacketSize, which caps the per-command body at
+//     min(peerMTU, configured MTU). MaximumMTU is 4096, well below 2^16.
+//   - Both reliable and unreliable fragmentation split on maxReliableFragmentDataLength
+//     and maxUnreliableFragmentDataLength, both bounded by MTU - overhead.
+//   - Inbound parsers reject lengths that exceed MaximumPacketSize; they do not
+//     drive marshal.
+//
+// An overflow here therefore signals a programmer error in a caller that has
+// either bypassed validatePacketSize or constructed a SendFragment/SendReliable
+// with a hand-rolled oversized data slice. Crashing loudly is preferable to
+// silently truncating wire bytes that the receiver cannot reconstruct.
 func payloadSize16(n int) uint16 {
 	if n < 0 || n > math.MaxUint16 {
-		panic(fmt.Sprintf("protocol payload too large for 16-bit length: %d", n))
+		panic(fmt.Sprintf("protocol: payload too large for 16-bit length: %d", n))
 	}
 
 	return uint16(n)
