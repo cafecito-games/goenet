@@ -13,6 +13,16 @@ const _ = uint(len(Peer{}.UnsequencedWindow)*32) - uint(protocol.UnsequencedWind
 const _ = uint(protocol.UnsequencedWindowSize) - uint(len(Peer{}.UnsequencedWindow)*32)
 
 // Peer carries the internal ENet-oriented state for a remote endpoint.
+//
+// Peer is intentionally treated by the engine as a struct-of-fields data layer
+// rather than as a fully encapsulated state machine: the engine reaches in to
+// increment sequence counters and update window state directly, because every
+// such mutation is paired with engine-side bookkeeping (RTT, throttle, bandwidth,
+// queue order) that does not factor cleanly through narrow accessor methods.
+// The methods that DO live on Peer are reserved for invariants that span more
+// than a single field — queue-and-index pairing for sent reliable commands,
+// waiting-data saturation arithmetic, queue resets — and the engine MUST go
+// through them rather than poking the underlying maps and queues itself.
 type Peer struct {
 	OutgoingReliableSequenceNumber uint16
 	OutgoingUnsequencedGroup       uint16

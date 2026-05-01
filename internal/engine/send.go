@@ -560,8 +560,12 @@ func commandFitsPeerMTU(p *peer.Peer, cmd *peer.OutgoingCommand, withChecksum bo
 }
 
 func marshalAcknowledgement(ack *peer.Acknowledgement) protocol.Acknowledge {
+	// Command is set explicitly here so the wire encoding is fully determined
+	// by the constructed value; we no longer depend on protocol.Acknowledge's
+	// MarshalBinary patching the command byte at serialization time.
 	return protocol.Acknowledge{
 		Header: protocol.CommandHeader{
+			Command:                protocol.CommandAcknowledge,
 			ChannelID:              ack.Command.Header.ChannelID,
 			ReliableSequenceNumber: ack.Command.Header.ReliableSequenceNumber,
 		},
