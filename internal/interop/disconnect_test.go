@@ -52,6 +52,42 @@ func TestGoServerObservesClientInitiatedDisconnect(t *testing.T) {
 	}
 }
 
+func TestGoPublicServerObservesClientInitiatedDisconnect(t *testing.T) {
+	cfg := mustLoadInteropConfigForTest(t)
+	mustBuildScenario(t, cfg, "disconnect_client_initiated")
+
+	host := mustListenPublicHost(t)
+	client := startScenario(t, "disconnect_client_initiated",
+		"--host", "127.0.0.1",
+		"--port", strconv.Itoa(host.Port()),
+		"--expect", clientInitiatedReadyPayload,
+	)
+
+	connect := waitForPublicEventType(t, host.Host, goenet.EventConnect)
+	mustSendPublicReliablePacket(t, host.Host, connect.Peer, clientInitiatedReadyPayload)
+	disconnect := waitForPublicEventType(t, host.Host, goenet.EventDisconnect)
+	if disconnect.Peer != connect.Peer {
+		t.Fatal("disconnect peer mismatch")
+	}
+	if disconnect.Data != clientInitiatedDisconnectData {
+		t.Fatalf("disconnect data = %#x, want %#x", disconnect.Data, clientInitiatedDisconnectData)
+	}
+
+	output := mustWaitProcessSuccess(t, client)
+	if !strings.Contains(output, "CONNECT") {
+		t.Fatalf("client output missing CONNECT:\n%s", output)
+	}
+	if !strings.Contains(output, "RECEIVE "+clientInitiatedReadyPayload) {
+		t.Fatalf("client output missing ready payload:\n%s", output)
+	}
+	if !strings.Contains(output, "DISCONNECT_REQUEST "+strconv.FormatUint(uint64(clientInitiatedDisconnectData), 10)) {
+		t.Fatalf("client output missing disconnect request:\n%s", output)
+	}
+	if !strings.Contains(output, "DISCONNECT") {
+		t.Fatalf("client output missing disconnect completion:\n%s", output)
+	}
+}
+
 func TestGoClientObservesServerInitiatedDisconnect(t *testing.T) {
 	cfg := mustLoadInteropConfigForTest(t)
 	mustBuildScenario(t, cfg, "disconnect_server_initiated")

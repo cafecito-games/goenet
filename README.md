@@ -48,9 +48,9 @@ Peer operations:
 
 - `Peer.State() PeerState`
 - `Peer.Send(channelID uint8, packet *Packet) error`
-- `Peer.Disconnect(data uint32) error`
-- `Peer.DisconnectNow(data uint32) error`
-- `Peer.DisconnectLater(data uint32) error`
+- `Peer.Disconnect(ctx context.Context, data uint32) error`
+- `Peer.DisconnectNow(ctx context.Context, data uint32) error`
+- `Peer.DisconnectLater(ctx context.Context, data uint32) error`
 - `Peer.Reset()`
 
 Core value types:
@@ -167,8 +167,9 @@ defer host.Close()
 - `EventNone` means the host serviced work or timed out without a user-visible event.
 - `PacketFlagReliable` maps to ENet reliable delivery.
 - `PacketFlagUnsequenced` maps to ENet unsequenced delivery for outbound and inbound packets.
-- `Connect`, `Send`, `Broadcast`, `Disconnect`, and `DisconnectLater` queue work. Call `Flush` to push queued outbound traffic immediately.
+- `Connect`, `Send`, `Broadcast`, and `DisconnectLater` queue work. Call `Flush` to push queued outbound traffic immediately.
 - `Disconnect` is graceful for connected peers. During handshake states it follows ENet's immediate unsequenced disconnect path and resets the peer locally after flush.
+- `Disconnect`, `DisconnectNow`, and `DisconnectLater` take a caller-provided `context.Context` because some disconnect paths perform synchronous flush work.
 - `DisconnectNow` always uses the immediate unsequenced path: notify the remote peer, flush immediately, and reset the local peer without waiting for a later disconnect event.
 
 ## Examples

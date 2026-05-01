@@ -48,7 +48,9 @@ func TestConnectLogsEngineComponent(t *testing.T) {
 	}
 
 	if !handler.Contains(func(r capturedRecord) bool {
-		return r.Attrs["component"] == "engine" && r.Message == "peer connect queued"
+		return r.Attrs["component"] == "engine" &&
+			r.Level == slog.LevelDebug &&
+			r.Message == "peer connect queued"
 	}) {
 		t.Fatal("missing engine connect log")
 	}
@@ -104,6 +106,7 @@ func TestNotifyConnectLogsReadablePeerStates(t *testing.T) {
 
 	if !handler.Contains(func(r capturedRecord) bool {
 		return r.Message == "peer connect transition" &&
+			r.Level == slog.LevelDebug &&
 			attrUint64(r.Attrs["peer_id"]) == uint64(raw.IncomingPeerID) &&
 			r.Attrs["from_state"] == "connecting" &&
 			r.Attrs["to_state"] == "connection_succeeded"

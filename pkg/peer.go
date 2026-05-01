@@ -53,10 +53,11 @@ func (p *Peer) lockedRaw() (*peer.Peer, func(), error) {
 	if p == nil || p.host == nil {
 		return nil, func() {}, ErrNilPeer
 	}
+	p.host.mu.Lock()
 	if p.host.closed.Load() {
+		p.host.mu.Unlock()
 		return nil, func() {}, ErrHostClosed
 	}
-	p.host.mu.Lock()
 	if p.raw == nil {
 		p.host.mu.Unlock()
 		return nil, func() {}, ErrNilPeer
@@ -111,14 +112,14 @@ func (p *Peer) Send(channelID uint8, packet *Packet) error {
 }
 
 // Disconnect queues a graceful ENet-compatible disconnect request.
-func (p *Peer) Disconnect(data uint32) error {
+func (p *Peer) Disconnect(ctx context.Context, data uint32) error {
 	raw, unlock, err := p.lockedRaw()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	p.host.engine.SetServiceTime(p.host.nowMs())
-	if err := p.host.engine.Disconnect(context.Background(), raw, data); err != nil {
+	if err := p.host.engine.Disconnect(ctx, raw, data); err != nil {
 		return err
 	}
 	p.state = fromCorePeerState(raw.State)
@@ -126,14 +127,14 @@ func (p *Peer) Disconnect(data uint32) error {
 }
 
 // DisconnectNow forcefully notifies the remote peer, flushes immediately, and resets locally.
-func (p *Peer) DisconnectNow(data uint32) error {
+func (p *Peer) DisconnectNow(ctx context.Context, data uint32) error {
 	raw, unlock, err := p.lockedRaw()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	p.host.engine.SetServiceTime(p.host.nowMs())
-	if err := p.host.engine.DisconnectNow(context.Background(), raw, data); err != nil {
+	if err := p.host.engine.DisconnectNow(ctx, raw, data); err != nil {
 		return err
 	}
 	p.state = fromCorePeerState(raw.State)
@@ -141,14 +142,14 @@ func (p *Peer) DisconnectNow(data uint32) error {
 }
 
 // DisconnectLater defers disconnect until outbound reliable work drains.
-func (p *Peer) DisconnectLater(data uint32) error {
+func (p *Peer) DisconnectLater(ctx context.Context, data uint32) error {
 	raw, unlock, err := p.lockedRaw()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	p.host.engine.SetServiceTime(p.host.nowMs())
-	if err := p.host.engine.DisconnectLater(context.Background(), raw, data); err != nil {
+	if err := p.host.engine.DisconnectLater(ctx, raw, data); err != nil {
 		return err
 	}
 	p.state = fromCorePeerState(raw.State)
