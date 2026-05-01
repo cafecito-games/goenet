@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/testsupport"
 )
@@ -28,6 +30,9 @@ func TestListenReturnsUsableHost(t *testing.T) {
 
 	if host.Config().PeerCount != 4 {
 		t.Fatalf("peer count = %d, want 4", host.Config().PeerCount)
+	}
+	if host.Config().ChannelLimit != 2 {
+		t.Fatalf("channel limit = %d, want 2", host.Config().ChannelLimit)
 	}
 }
 
@@ -70,6 +75,34 @@ func TestNewHostReturnsClientCapableHost(t *testing.T) {
 	}
 }
 
+func TestListenNormalizesZeroChannelLimitInConfigSnapshot(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{PeerCount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := host.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	if got := host.Config().ChannelLimit; got == 0 {
+		t.Fatal("expected normalized non-zero channel limit")
+	}
+}
+
+func TestListenRejectsNegativePeerCount(t *testing.T) {
+	if _, err := Listen("127.0.0.1:0", Config{PeerCount: -1, ChannelLimit: 1}); err == nil {
+		t.Fatal("expected negative peer count to be rejected")
+	}
+}
+
+func TestListenRejectsTooSmallMTU(t *testing.T) {
+	if _, err := Listen("127.0.0.1:0", Config{PeerCount: 1, ChannelLimit: 1, MTU: 1}); err == nil {
+		t.Fatal("expected too-small MTU to be rejected")
+	}
+}
+
 func TestConfigRoundTripsLogger(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -107,7 +140,7 @@ func TestListenLogsHostLifecycleWithComponentTag(t *testing.T) {
 	t.Cleanup(func() { _ = host.Close() })
 
 	if !handler.Contains(func(r capturedRecord) bool {
-		return r.Message == "host started" && r.Attrs["component"] == "host"
+		return r.Level == slog.LevelDebug && r.Message == "host started" && r.Attrs["component"] == "host"
 	}) {
 		t.Fatal("missing host started log")
 	}
@@ -131,7 +164,7 @@ func TestCloseLogsHostLifecycleWithComponentTag(t *testing.T) {
 	}
 
 	if !handler.Contains(func(r capturedRecord) bool {
-		return r.Message == "host closed" && r.Attrs["component"] == "host"
+		return r.Level == slog.LevelDebug && r.Message == "host closed" && r.Attrs["component"] == "host"
 	}) {
 		t.Fatal("missing host closed log")
 	}
@@ -142,7 +175,7 @@ func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
 	logger := slog.New(handler)
 	closeErr := errors.New("close failed")
 
-	host := newHostWithSocket(Config{
+	host, err := newHostWithSocket(Config{
 		PeerCount:    1,
 		ChannelLimit: 1,
 		Logger:       logger,
@@ -150,8 +183,11 @@ func TestCloseLogsHostCloseFailureWithComponentTag(t *testing.T) {
 		FakeSocket: testsupport.NewFakeSocket(),
 		err:        closeErr,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	err := host.Close()
+	err = host.Close()
 	if !errors.Is(err, closeErr) {
 		t.Fatalf("Close() error = %v, want %v", err, closeErr)
 	}
@@ -251,6 +287,60 @@ func TestCloseMakesFurtherOperationsFail(t *testing.T) {
 
 	if err := host.Flush(context.Background()); err == nil {
 		t.Fatal("expected flush after close to fail")
+	}
+}
+
+func TestCloseWaitsForInFlightServiceCall(t *testing.T) {
+	sock := newBlockingCloseSocket()
+	host, err := newHostWithSocket(Config{PeerCount: 1, ChannelLimit: 1}, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serviceCtx, cancelService := context.WithCancel(context.Background())
+	defer cancelService()
+
+	serviceDone := make(chan error, 1)
+	go func() {
+		_, err := host.Service(serviceCtx, time.Hour)
+		serviceDone <- err
+	}()
+
+	select {
+	case <-sock.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Service to enter socket read")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- host.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before Service released host lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancelService()
+
+	select {
+	case err := <-serviceDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Service() error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Service to return after cancellation")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Close to finish after Service returned")
 	}
 }
 
@@ -563,7 +653,7 @@ func TestDisconnectOnConnectedPeerQueuesAcknowledgedDisconnect(t *testing.T) {
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
 	baselineWrites := sock.WriteCount()
 
-	if err := peer.Disconnect(9); err != nil {
+	if err := peer.Disconnect(context.Background(), 9); err != nil {
 		t.Fatal(err)
 	}
 	if got := peer.State(); got != PeerStateDisconnecting {
@@ -603,7 +693,7 @@ func TestPeerDisconnectLaterQueuesDisconnectAfterPendingReliableAck(t *testing.T
 	if err := peer.Send(0, &Packet{Data: []byte("queued"), Flags: PacketFlagReliable}); err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.DisconnectLater(17); err != nil {
+	if err := peer.DisconnectLater(context.Background(), 17); err != nil {
 		t.Fatal(err)
 	}
 	if got := peer.State(); got != PeerStateDisconnectLater {
@@ -662,7 +752,7 @@ func TestDisconnectOnConnectingPeerFlushesUnsequencedDisconnectAndResets(t *test
 		t.Fatal(err)
 	}
 
-	if err := peer.Disconnect(0xDEAD); err != nil {
+	if err := peer.Disconnect(context.Background(), 0xDEAD); err != nil {
 		t.Fatal(err)
 	}
 	if got := peer.State(); got != PeerStateDisconnected {
@@ -693,13 +783,33 @@ func TestDisconnectOnConnectingPeerFlushesUnsequencedDisconnectAndResets(t *test
 	}
 }
 
+func TestDisconnectOnConnectingPeerHonorsCanceledContext(t *testing.T) {
+	host, sock := newTestHost()
+
+	peer, err := host.Connect("127.0.0.1:9001", 1, 0xCAFE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = peer.Disconnect(ctx, 0xDEAD)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Disconnect() error = %v, want %v", err, context.Canceled)
+	}
+	if got := sock.WriteCount(); got != 0 {
+		t.Fatalf("write count = %d, want 0", got)
+	}
+}
+
 func TestDisconnectNowFlushesUnsequencedDisconnectAndResetsConnectedPeer(t *testing.T) {
 	host, sock := newTestHost()
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
 	baselineWrites := sock.WriteCount()
 
 	disconnectNow := mustDisconnectNowPeer(t, peer)
-	if err := disconnectNow.DisconnectNow(0xBEEF); err != nil {
+	if err := disconnectNow.DisconnectNow(context.Background(), 0xBEEF); err != nil {
 		t.Fatal(err)
 	}
 	if got := peer.State(); got != PeerStateDisconnected {
@@ -731,7 +841,7 @@ func TestDisconnectNowOnDisconnectedPeerIsSafe(t *testing.T) {
 	disconnectNow := mustDisconnectNowPeer(t, peer)
 	peer.Reset()
 
-	if err := disconnectNow.DisconnectNow(1); err != nil {
+	if err := disconnectNow.DisconnectNow(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if got := peer.State(); got != PeerStateDisconnected {
@@ -855,11 +965,16 @@ func newTestHost() (*Host, *testsupport.FakeSocket) {
 
 func newConfiguredTestHost(cfg Config) (*Host, *testsupport.FakeSocket) {
 	sock := testsupport.NewFakeSocket()
-	return newHostWithSocket(cfg, sock), sock
+	host, err := newHostWithSocket(cfg, sock)
+	if err != nil {
+		panic(err)
+	}
+	return host, sock
 }
 
 type capturedRecord struct {
 	Message string
+	Level   slog.Level
 	Attrs   map[string]any
 }
 
@@ -898,6 +1013,7 @@ func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
 func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
 	captured := capturedRecord{
 		Message: record.Message,
+		Level:   record.Level,
 		Attrs:   make(map[string]any),
 	}
 	for _, attr := range h.attrs {
@@ -981,13 +1097,52 @@ func (s *closeErrorSocket) Close() error {
 	return s.err
 }
 
+type blockingCloseSocket struct {
+	readStarted chan struct{}
+	releaseRead chan struct{}
+	closed      atomic.Bool
+}
+
+func newBlockingCloseSocket() *blockingCloseSocket {
+	return &blockingCloseSocket{
+		readStarted: make(chan struct{}),
+		releaseRead: make(chan struct{}),
+	}
+}
+
+func (s *blockingCloseSocket) ReadPacket(ctx context.Context, _ []byte) (int, core.Address, error) {
+	select {
+	case <-s.readStarted:
+	default:
+		close(s.readStarted)
+	}
+
+	select {
+	case <-ctx.Done():
+		return 0, core.Address{}, ctx.Err()
+	case <-s.releaseRead:
+		return 0, core.Address{}, net.ErrClosed
+	}
+}
+
+func (s *blockingCloseSocket) WritePacket(context.Context, core.Address, []byte) (int, error) {
+	return 0, errors.New("unexpected write")
+}
+
+func (s *blockingCloseSocket) Close() error {
+	if s.closed.CompareAndSwap(false, true) {
+		close(s.releaseRead)
+	}
+	return nil
+}
+
 func attrError(v any) error {
 	err, _ := v.(error)
 	return err
 }
 
 type disconnectNowPeer interface {
-	DisconnectNow(data uint32) error
+	DisconnectNow(ctx context.Context, data uint32) error
 }
 
 func mustDisconnectNowPeer(t *testing.T, peer *Peer) disconnectNowPeer {
@@ -995,7 +1150,7 @@ func mustDisconnectNowPeer(t *testing.T, peer *Peer) disconnectNowPeer {
 
 	disconnectNow, ok := any(peer).(disconnectNowPeer)
 	if !ok {
-		t.Fatal("Peer does not implement DisconnectNow(data uint32) error")
+		t.Fatal("Peer does not implement DisconnectNow(context.Context, data uint32) error")
 	}
 
 	return disconnectNow

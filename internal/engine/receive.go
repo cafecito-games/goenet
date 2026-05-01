@@ -549,7 +549,7 @@ func (h *Host) handleDisconnect(p *peer.Peer, command protocol.Disconnect) inbou
 		h.resetPeer(p)
 	}
 
-	h.logger.Info(
+	h.logger.Debug(
 		"peer disconnect transition",
 		"peer_id", p.IncomingPeerID,
 		"from_state", previousState.String(),
@@ -1048,7 +1048,7 @@ func (h *Host) notifyConnect(p *peer.Peer) {
 	} else {
 		p.State = core.PeerStateConnectionPending
 	}
-	h.logger.Info(
+	h.logger.Debug(
 		"peer connect transition",
 		"peer_id", p.IncomingPeerID,
 		"from_state", previousState.String(),

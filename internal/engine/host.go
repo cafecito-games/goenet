@@ -330,7 +330,7 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 		return nil, err
 	}
 
-	h.logger.Info(
+	h.logger.Debug(
 		"peer connect queued",
 		"peer_id", p.IncomingPeerID,
 		"addr", addr.AddrPort(),

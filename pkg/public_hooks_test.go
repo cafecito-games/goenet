@@ -13,7 +13,7 @@ import (
 func TestServiceUsesPublicInterceptorAndSynthesizedEvent(t *testing.T) {
 	var calls int
 	sock := testsupport.NewFakeSocket()
-	host := newHostWithSocket(Config{
+	host, err := newHostWithSocket(Config{
 		PeerCount:    1,
 		ChannelLimit: 1,
 		Intercept: interceptorFunc(func(addr netip.AddrPort, payload []byte) (InterceptDecision, error) {
@@ -34,6 +34,9 @@ func TestServiceUsesPublicInterceptorAndSynthesizedEvent(t *testing.T) {
 			}, nil
 		}),
 	}, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), []byte("abc"))
 
@@ -59,12 +62,15 @@ func TestFlushUsesPublicChecksummerAndCompressor(t *testing.T) {
 	checksummer := &captureChecksummer{}
 	compressor := &captureCompressor{}
 	sock := testsupport.NewFakeSocket()
-	host := newHostWithSocket(Config{
+	host, err := newHostWithSocket(Config{
 		PeerCount:    1,
 		ChannelLimit: 1,
 		Checksum:     checksummer,
 		Compressor:   compressor,
 	}, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	raw := host.engine.AddPeer(mustCoreAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
 	peer := host.wrapPeer(raw)

@@ -1,9 +1,11 @@
 package goenet
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/cafecito-games/goenet/internal/core"
+	"github.com/cafecito-games/goenet/internal/protocol"
 )
 
 // Config configures host construction and ENet compatibility limits.
@@ -25,8 +27,13 @@ func DefaultConfig() Config {
 	return fromCoreConfig(core.DefaultConfig())
 }
 
-func toCoreConfig(cfg Config) core.Config {
-	coreCfg := core.DefaultConfig()
+func normalizeConfig(cfg Config) (normalized Config, coreCfg core.Config, err error) {
+	if cfg.PeerCount < 0 {
+		err = fmt.Errorf("goenet: peer count must be non-negative")
+		return
+	}
+
+	coreCfg = core.DefaultConfig()
 	if cfg.PeerCount != 0 {
 		coreCfg.PeerCount = cfg.PeerCount
 	}
@@ -54,8 +61,25 @@ func toCoreConfig(cfg Config) core.Config {
 	if cfg.Logger != nil {
 		coreCfg.Logger = cfg.Logger
 	}
+	if coreCfg.ChannelLimit == 0 {
+		coreCfg.ChannelLimit = uint8(protocol.MaximumPeerID >> 4)
+	}
+	if coreCfg.MTU < protocol.MinimumMTU || coreCfg.MTU > protocol.MaximumMTU {
+		err = fmt.Errorf(
+			"goenet: mtu must be between %d and %d bytes",
+			protocol.MinimumMTU,
+			protocol.MaximumMTU,
+		)
+		return
+	}
 
-	return coreCfg
+	normalized = fromCoreConfig(coreCfg)
+	normalized.Checksum = cfg.Checksum
+	normalized.Compressor = cfg.Compressor
+	normalized.Intercept = cfg.Intercept
+	normalized.Logger = cfg.Logger
+
+	return
 }
 
 func fromCoreConfig(cfg core.Config) Config {

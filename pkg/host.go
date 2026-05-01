@@ -54,7 +54,7 @@ func Listen(addr string, cfg Config) (*Host, error) {
 		return nil, err
 	}
 
-	return newHost(cfg, conn), nil
+	return newHost(cfg, conn)
 }
 
 // NewHost creates a public host bound to an ephemeral local UDP port.
@@ -64,7 +64,7 @@ func NewHost(cfg Config) (*Host, error) {
 		return nil, err
 	}
 
-	return newHost(cfg, conn), nil
+	return newHost(cfg, conn)
 }
 
 // Config returns the host configuration snapshot.
@@ -110,10 +110,6 @@ func (h *Host) LocalAddrPort() netip.AddrPort {
 
 // Connect initiates an outbound ENet-compatible connection.
 func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, error) {
-	if h.closed.Load() {
-		return nil, ErrHostClosed
-	}
-
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
@@ -124,7 +120,9 @@ func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, err
 		return nil, err
 	}
 
-	h.mu.Lock()
+	if err := h.lockOpen(); err != nil {
+		return nil, err
+	}
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
 
@@ -142,10 +140,6 @@ func (h *Host) Connect(addr string, channelCount uint8, data uint32) (*Peer, err
 // otherwise pending. A zero or negative timeout polls without blocking. The
 // caller's ctx still cancels the call; whichever fires first wins.
 func (h *Host) Service(ctx context.Context, timeout time.Duration) (Event, error) {
-	if h.closed.Load() {
-		return Event{}, ErrHostClosed
-	}
-
 	tickCtx := ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -153,7 +147,9 @@ func (h *Host) Service(ctx context.Context, timeout time.Duration) (Event, error
 		defer cancel()
 	}
 
-	h.mu.Lock()
+	if err := h.lockOpen(); err != nil {
+		return Event{}, err
+	}
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
 
@@ -163,7 +159,7 @@ func (h *Host) Service(ctx context.Context, timeout time.Duration) (Event, error
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			return Event{}, nil
 		}
-		return Event{}, err
+		return Event{}, h.normalizeRuntimeError(err)
 	}
 
 	return h.translateEvent(event), nil
@@ -171,28 +167,24 @@ func (h *Host) Service(ctx context.Context, timeout time.Duration) (Event, error
 
 // Flush writes any queued outbound data.
 func (h *Host) Flush(ctx context.Context) error {
-	if h.closed.Load() {
-		return ErrHostClosed
+	if err := h.lockOpen(); err != nil {
+		return err
 	}
-
-	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
 
-	return h.engine.Flush(ctx)
+	return h.normalizeRuntimeError(h.engine.Flush(ctx))
 }
 
 // Broadcast queues a packet for every currently connected peer. Per-peer Send errors
 // are collected and returned together via errors.Join; a partial fanout still attempts
 // every peer rather than aborting on the first failure.
 func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
-	if h.closed.Load() {
-		return ErrHostClosed
-	}
-
 	corePacket := toCorePacket(packet)
 
-	h.mu.Lock()
+	if err := h.lockOpen(); err != nil {
+		return err
+	}
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
 
@@ -213,10 +205,9 @@ func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
 // per-peer throttle recomputation on the next service tick. A value of zero on
 // either argument disables the corresponding limit.
 func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) error {
-	if h.closed.Load() {
-		return ErrHostClosed
+	if err := h.lockOpen(); err != nil {
+		return err
 	}
-	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.engine.BandwidthLimit(incomingBandwidth, outgoingBandwidth)
 	return nil
@@ -224,37 +215,60 @@ func (h *Host) BandwidthLimit(incomingBandwidth, outgoingBandwidth uint32) error
 
 // Close releases the underlying UDP socket.
 func (h *Host) Close() error {
-	if !h.closed.CompareAndSwap(false, true) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.closed.Load() {
 		return nil
 	}
+	h.closed.Store(true)
 
 	if err := h.socket.Close(); err != nil {
 		h.logger.Error("host close failed", "err", err)
 		return err
 	}
 
-	h.logger.Info("host closed")
+	h.logger.Debug("host closed")
 	return nil
 }
 
-func newHost(cfg Config, conn *net.UDPConn) *Host {
-	sock := isocket.NewUDP(conn, cfg.Logger)
-	host := newHostWithSocket(cfg, sock)
-	host.localAddr = cloneNetAddr(conn.LocalAddr())
-	host.logger.Info("host started", "addr", host.localAddr)
-	return host
+func (h *Host) lockOpen() error {
+	h.mu.Lock()
+	if h.closed.Load() {
+		h.mu.Unlock()
+		return ErrHostClosed
+	}
+	return nil
 }
 
-func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
-	coreCfg := toCoreConfig(cfg)
-	normalized := fromCoreConfig(coreCfg)
+func (h *Host) normalizeRuntimeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if h.closed.Load() && errors.Is(err, net.ErrClosed) {
+		return ErrHostClosed
+	}
+	return err
+}
+
+func newHost(cfg Config, conn *net.UDPConn) (*Host, error) {
+	sock := isocket.NewUDP(conn, cfg.Logger)
+	host, err := newHostWithSocket(cfg, sock)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	host.localAddr = cloneNetAddr(conn.LocalAddr())
+	host.logger.Debug("host started", "addr", host.localAddr)
+	return host, nil
+}
+
+func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) (*Host, error) {
+	normalized, coreCfg, err := normalizeConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	hostLogger := core.ComponentLogger(coreCfg.Logger, "host")
-	// Preserve user-supplied hook references on the public Config snapshot —
-	// fromCoreConfig only round-trips the core-owned config fields.
-	normalized.Checksum = cfg.Checksum
-	normalized.Compressor = cfg.Compressor
-	normalized.Intercept = cfg.Intercept
-	normalized.Logger = cfg.Logger
 
 	return &Host{
 		config:    normalized,
@@ -263,7 +277,7 @@ func newHostWithSocket(cfg Config, sock isocket.DatagramSocket) *Host {
 		engine:    engine.NewHost(coreCfg, sock, 0),
 		peers:     make(map[*peer.Peer]*Peer),
 		startTime: time.Now(),
-	}
+	}, nil
 }
 
 // nowMs returns wall-clock milliseconds elapsed since host construction, narrowed
