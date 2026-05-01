@@ -356,29 +356,42 @@ func TestReliableSendRejectsFragmentationThatWouldWrapReliableSequenceSpace(t *t
 	}
 }
 
-func TestUnreliableSendRejectsPacketThatExceedsNoFragmentationLimit(t *testing.T) {
+func TestUnreliableSendFragmentsPacketsExceedingMTU(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 
 	packet := &core.Packet{
-		Data: bytesOfLen(int(peer.Raw.MTU-9), 'x'),
+		Data: bytesOfLen(int(peer.Raw.MTU)+512, 'x'),
 	}
-	err := host.Send(peer.Raw, 0, packet)
-	if err == nil {
-		t.Fatal("expected oversize packet error")
+	if err := host.Send(peer.Raw, 0, packet); err != nil {
+		t.Fatalf("Send returned %v", err)
 	}
-	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := peer.OutgoingCount(); got != 0 {
-		t.Fatalf("OutgoingCount = %d", got)
+	if got := peer.OutgoingCount(); got < 2 {
+		t.Fatalf("OutgoingCount = %d, want >= 2 fragments", got)
 	}
 	if got := peer.SentReliableCount(); got != 0 {
 		t.Fatalf("SentReliableCount = %d", got)
 	}
 }
 
-func TestUnreliableSendUsesPeerMTUForValidation(t *testing.T) {
+func TestUnreliableSendRejectsUnsequencedPacketAboveMTU(t *testing.T) {
+	host, _ := newTestHost(t)
+	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
+
+	packet := &core.Packet{
+		Data:  bytesOfLen(int(peer.Raw.MTU)+1, 'x'),
+		Flags: core.PacketFlagUnsequenced,
+	}
+	err := host.Send(peer.Raw, 0, packet)
+	if err == nil {
+		t.Fatal("expected oversize unsequenced error")
+	}
+	if !strings.Contains(err.Error(), "unsequenced packet exceeds no-fragmentation limit") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUnreliableSendRejectsTinyMTUTooSmallToFragment(t *testing.T) {
 	host, _ := newTestHost(t)
 	peer := &testPeer{Raw: mustConnectedPeer(t, host)}
 	peer.Raw.MTU = 20
@@ -387,9 +400,9 @@ func TestUnreliableSendUsesPeerMTUForValidation(t *testing.T) {
 		Data: bytesOfLen(11, 'x'),
 	})
 	if err == nil {
-		t.Fatal("expected oversize packet error")
+		t.Fatal("expected fragmentation MTU error")
 	}
-	if !strings.Contains(err.Error(), "packet exceeds no-fragmentation limit") {
+	if !strings.Contains(err.Error(), "too small to fragment") {
 		t.Fatalf("error = %v", err)
 	}
 }

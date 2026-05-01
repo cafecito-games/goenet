@@ -40,6 +40,12 @@ const (
 //
 // Field access on Peer (raw, state) is always synchronized via the owning Host's
 // mutex; never read p.raw or p.state outside that lock.
+//
+// state is a cached copy of raw.State. It survives the moment translateEvent
+// clears raw on a terminal event (Disconnect / DisconnectTimeout) so callers
+// holding onto the handle past that event still see PeerStateDisconnected from
+// State() instead of a misleading default. While raw is non-nil, State() reads
+// from it directly and refreshes the cache as a side effect.
 type Peer struct {
 	host  *Host
 	raw   *peer.Peer

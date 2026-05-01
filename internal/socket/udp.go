@@ -117,12 +117,17 @@ func (s *UDP) Close() error {
 	return s.conn.Close()
 }
 
+// nextPollDeadline picks a read/write deadline that lets the goroutine wake up
+// to check ctx for cancellation. When ctx has its own deadline we use it
+// directly so the kernel can block until either the socket is ready or the
+// caller-bounded tick expires. When ctx is unbounded but cancellable we use a
+// 100ms heartbeat — long enough to avoid a tight 100Hz spin against an idle
+// socket, short enough to react to ctx.Done() promptly.
 func nextPollDeadline(ctx context.Context) time.Time {
-	deadline := time.Now().Add(10 * time.Millisecond)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+	if ctxDeadline, ok := ctx.Deadline(); ok {
 		return ctxDeadline
 	}
-	return deadline
+	return time.Now().Add(100 * time.Millisecond)
 }
 
 func isTimeoutError(err error) bool {

@@ -1187,25 +1187,29 @@ func (h *Host) removeSentReliableCommand(p *peer.Peer, reliableSequenceNumber ui
 	return protocol.CommandNone
 }
 
-func peerThrottle(p *peer.Peer, roundTripTime uint32) int {
+// peerThrottle adjusts the peer's packet-throttle counter based on the latest
+// round-trip sample, mirroring enet_peer_throttle. The C version returns a
+// direction code (-1/0/1) that no current call site uses, so this Go port
+// returns nothing.
+func peerThrottle(p *peer.Peer, roundTripTime uint32) {
 	if p.LastRoundTripTime <= p.LastRoundTripTimeVariance {
 		p.PacketThrottle = p.PacketThrottleLimit
-	} else if roundTripTime <= p.LastRoundTripTime {
+		return
+	}
+	if roundTripTime <= p.LastRoundTripTime {
 		p.PacketThrottle += p.PacketThrottleAcceleration
 		if p.PacketThrottle > p.PacketThrottleLimit {
 			p.PacketThrottle = p.PacketThrottleLimit
 		}
-		return 1
-	} else if roundTripTime > p.LastRoundTripTime+2*p.LastRoundTripTimeVariance {
+		return
+	}
+	if roundTripTime > p.LastRoundTripTime+2*p.LastRoundTripTimeVariance {
 		if p.PacketThrottle > p.PacketThrottleDeceleration {
 			p.PacketThrottle -= p.PacketThrottleDeceleration
 		} else {
 			p.PacketThrottle = 0
 		}
-		return -1
 	}
-
-	return 0
 }
 
 func (h *Host) findReliableFragmentCommand(channel *peer.Channel, startSequence uint16) *peer.IncomingCommand {
