@@ -64,8 +64,8 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 	if event, ok := h.dispatchEvent(); ok {
 		return event, nil
 	}
-	if timeutil.Difference(h.serviceTime, h.bandwidthThrottleEpoch) >= defaultBandwidthThrottleInterval {
-		if err := h.bandwidthThrottle(); err != nil {
+	if h.throttle.dueAt(h.serviceTime, defaultBandwidthThrottleInterval) {
+		if err := h.throttle.Run(h.serviceTime, h.peers, h.queueOutgoingControlCommand, h.logger); err != nil {
 			return Event{}, err
 		}
 	}
@@ -430,12 +430,12 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 
 	runtime := h.runtime[selected]
 	runtime.eventData = command.Data
-	runtime.windowSize = negotiatedPeerWindowSize(h.outgoingBandwidth, selected.IncomingBandwidth)
+	runtime.windowSize = negotiatedPeerWindowSize(h.throttle.OutgoingBudget(), selected.IncomingBandwidth)
 	selected.PacketThrottleInterval = command.PacketThrottleInterval
 	selected.PacketThrottleAcceleration = command.PacketThrottleAcceleration
 	selected.PacketThrottleDeceleration = command.PacketThrottleDeceleration
 
-	verifyWindowSize := minUint32(verifyConnectWindowSize(h.incomingBandwidth), command.WindowSize)
+	verifyWindowSize := minUint32(verifyConnectWindowSize(h.throttle.IncomingBudget()), command.WindowSize)
 	verifyWindowSize = clampUint32(verifyWindowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
 
 	verify := protocol.VerifyConnect{
@@ -450,8 +450,8 @@ func (h *Host) handleConnect(addr core.Address, command protocol.Connect) *peer.
 		ChannelCount:      channelCount,
 		// Advertise the host's actual bandwidth caps so the remote peer can do its
 		// half of the bandwidth/window negotiation (matches enet.h:1972-1973).
-		IncomingBandwidth:          h.incomingBandwidth,
-		OutgoingBandwidth:          h.outgoingBandwidth,
+		IncomingBandwidth:          h.throttle.IncomingBudget(),
+		OutgoingBandwidth:          h.throttle.OutgoingBudget(),
 		PacketThrottleInterval:     selected.PacketThrottleInterval,
 		PacketThrottleAcceleration: selected.PacketThrottleAcceleration,
 		PacketThrottleDeceleration: selected.PacketThrottleDeceleration,
@@ -853,17 +853,17 @@ func (h *Host) handleBandwidthLimit(p *peer.Peer, command protocol.BandwidthLimi
 		return false
 	}
 	if p.IncomingBandwidth != 0 {
-		h.bandwidthLimitedPeers--
+		h.throttle.DecrementLimitedPeers()
 	}
 	p.IncomingBandwidth = command.IncomingBandwidth
 	p.OutgoingBandwidth = command.OutgoingBandwidth
 	if p.IncomingBandwidth != 0 {
-		h.bandwidthLimitedPeers++
+		h.throttle.IncrementLimitedPeers()
 	}
 	// Recompute the per-peer window from the negotiated bandwidth pair so we
 	// don't blanket-reset to MaximumWindowSize on every BandwidthLimit command.
-	h.runtime[p].windowSize = negotiatedPeerWindowSize(h.outgoingBandwidth, p.IncomingBandwidth)
-	h.recalculateBandwidthLimits = true
+	h.runtime[p].windowSize = negotiatedPeerWindowSize(h.throttle.OutgoingBudget(), p.IncomingBandwidth)
+	h.throttle.MarkRecalculate()
 	return true
 }
 
@@ -1193,7 +1193,7 @@ func (h *Host) queueAcknowledgement(p *peer.Peer, header protocol.CommandHeader,
 			},
 		},
 	}
-	p.OutgoingDataTotal += checkedUint32FromInt(len(marshalAcknowledgement(ack).MarshalBinary(nil)))
+	p.OutgoingDataTotal += checkedUint32FromInt(marshalAcknowledgement(ack).WireSize())
 	p.Acknowledgements.PushBack(ack)
 }
 

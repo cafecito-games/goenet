@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -808,9 +809,15 @@ func mustAddress(t *testing.T, value string) core.Address {
 }
 
 func marshalDatagram(header iprotocol.Header, commands ...iprotocol.PacketCommand) []byte {
-	payload := header.MarshalBinary(nil)
+	payload, err := header.AppendBinary(nil)
+	if err != nil {
+		panic(fmt.Sprintf("marshalDatagram header: %v", err))
+	}
 	for _, command := range commands {
-		payload = command.MarshalBinary(payload)
+		payload, err = command.AppendBinary(payload)
+		if err != nil {
+			panic(fmt.Sprintf("marshalDatagram command: %v", err))
+		}
 	}
 
 	return payload

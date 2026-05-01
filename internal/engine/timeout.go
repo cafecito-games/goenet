@@ -97,7 +97,7 @@ func (h *Host) checkTimeouts() (Event, bool) {
 
 func (h *Host) notifyDisconnectTimeout(p *peer.Peer) (Event, bool) {
 	if p.State >= core.PeerStateConnectionPending {
-		h.recalculateBandwidthLimits = true
+		h.throttle.MarkRecalculate()
 	}
 
 	if p.State != core.PeerStateConnecting && p.State < core.PeerStateConnectionSucceeded {

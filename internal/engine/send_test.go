@@ -944,14 +944,16 @@ func (c *protocolCommand) setOutgoingSequenceNumbers(reliable, _ uint16) {
 	c.reliableSequenceNumber = reliable
 }
 
-func (c *protocolCommand) MarshalBinary(dst []byte) []byte {
+func (c *protocolCommand) AppendBinary(dst []byte) ([]byte, error) {
 	start := len(dst)
 	dst = append(dst, make([]byte, 4)...)
 	dst[start] = byte(c.command | iprotocol.Command(c.flags))
 	dst[start+1] = c.channelID
 	binary.BigEndian.PutUint16(dst[start+2:start+4], c.reliableSequenceNumber)
-	return dst
+	return dst, nil
 }
+
+func (c *protocolCommand) WireSize() int { return 4 }
 
 type sizedProtocolCommand struct {
 	protocolCommand
@@ -962,9 +964,16 @@ func (c *sizedProtocolCommand) setOutgoingSequenceNumbers(reliable, unreliable u
 	c.protocolCommand.setOutgoingSequenceNumbers(reliable, unreliable)
 }
 
-func (c *sizedProtocolCommand) MarshalBinary(dst []byte) []byte {
-	dst = c.protocolCommand.MarshalBinary(dst)
-	return append(dst, c.extra...)
+func (c *sizedProtocolCommand) AppendBinary(dst []byte) ([]byte, error) {
+	dst, err := c.protocolCommand.AppendBinary(dst)
+	if err != nil {
+		return nil, err
+	}
+	return append(dst, c.extra...), nil
+}
+
+func (c *sizedProtocolCommand) WireSize() int {
+	return c.protocolCommand.WireSize() + len(c.extra)
 }
 
 type assertErr string
@@ -993,8 +1002,8 @@ type wireSizedOnlyCommand struct {
 	size int
 }
 
-func (c wireSizedOnlyCommand) MarshalBinary([]byte) []byte {
-	panic("MarshalBinary should not be called when WireSize is available")
+func (c wireSizedOnlyCommand) AppendBinary([]byte) ([]byte, error) {
+	panic("AppendBinary should not be called when WireSize is available")
 }
 
 func (c wireSizedOnlyCommand) WireSize() int {

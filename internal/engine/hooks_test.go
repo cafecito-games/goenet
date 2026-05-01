@@ -254,7 +254,10 @@ func marshalCompressedDatagram(t *testing.T, compressor core.Compressor, header 
 		t.Fatal(err)
 	}
 	header.Flags |= iprotocol.HeaderFlagCompressed
-	wire := header.MarshalBinary(nil)
+	wire, marshalErr := header.AppendBinary(nil)
+	if marshalErr != nil {
+		t.Fatalf("AppendBinary header: %v", marshalErr)
+	}
 	wire = append(wire, compressed[:n]...)
 	return wire
 }
@@ -262,8 +265,14 @@ func marshalCompressedDatagram(t *testing.T, compressor core.Compressor, header 
 func checksumDatagram(t *testing.T, seed uint32, checksummer core.Checksummer, header iprotocol.Header, command iprotocol.PacketCommand) []byte {
 	t.Helper()
 
-	headerBytes := header.MarshalBinary(nil)
-	bodyBytes := command.MarshalBinary(nil)
+	headerBytes, err := header.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("AppendBinary header: %v", err)
+	}
+	bodyBytes, err := command.AppendBinary(nil)
+	if err != nil {
+		t.Fatalf("AppendBinary command: %v", err)
+	}
 	checksumBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(checksumBytes, seed)
 	sum := checksummer.Checksum([][]byte{headerBytes, checksumBytes, bodyBytes})
