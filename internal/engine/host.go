@@ -70,23 +70,19 @@ const (
 
 // Host carries the minimal outbound engine state for queueing and flush tests.
 type Host struct {
-	config                     core.Config
-	logger                     *slog.Logger
-	socket                     socket.DatagramSocket
-	peers                      []*peer.Peer
-	serviceTime                uint32
-	totalQueued                uint32
-	incomingBandwidth          uint32
-	outgoingBandwidth          uint32
-	bandwidthThrottleEpoch     uint32
-	bandwidthLimitedPeers      uint32
-	recalculateBandwidthLimits bool
-	dispatchSet                map[*peer.Peer]struct{}
-	dispatchQ                  []*peer.Peer
-	runtime                    map[*peer.Peer]*peerRuntime
-	intercepted                *Event
-	nextConnectID              uint32
-	sessionIDSeed              uint8
+	config        core.Config
+	logger        *slog.Logger
+	socket        socket.DatagramSocket
+	peers         []*peer.Peer
+	serviceTime   uint32
+	totalQueued   uint32
+	throttle      bandwidthThrottler
+	dispatchSet   map[*peer.Peer]struct{}
+	dispatchQ     []*peer.Peer
+	runtime       map[*peer.Peer]*peerRuntime
+	intercepted   *Event
+	nextConnectID uint32
+	sessionIDSeed uint8
 }
 
 // NewHost constructs an engine host around the provided socket and config snapshot.
@@ -355,8 +351,8 @@ func (h *Host) Connect(addr core.Address, channelCount uint8, data uint32) (*pee
 		MTU:                        p.MTU,
 		WindowSize:                 runtime.windowSize,
 		ChannelCount:               requestedChannels,
-		IncomingBandwidth:          h.incomingBandwidth,
-		OutgoingBandwidth:          h.outgoingBandwidth,
+		IncomingBandwidth:          h.throttle.IncomingBudget(),
+		OutgoingBandwidth:          h.throttle.OutgoingBudget(),
 		PacketThrottleInterval:     p.PacketThrottleInterval,
 		PacketThrottleAcceleration: p.PacketThrottleAcceleration,
 		PacketThrottleDeceleration: p.PacketThrottleDeceleration,
@@ -509,11 +505,12 @@ func lowUint16FromUint32(value uint32) uint16 {
 }
 
 func (h *Host) outboundWindowSize() uint32 {
-	if h.outgoingBandwidth == 0 {
+	outgoing := h.throttle.OutgoingBudget()
+	if outgoing == 0 {
 		return protocol.MaximumWindowSize
 	}
 
-	windowSize := (h.outgoingBandwidth / peerWindowSizeScale) * protocol.MinimumWindowSize
+	windowSize := (outgoing / peerWindowSizeScale) * protocol.MinimumWindowSize
 	return clampUint32(windowSize, protocol.MinimumWindowSize, protocol.MaximumWindowSize)
 }
 

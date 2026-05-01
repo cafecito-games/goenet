@@ -393,8 +393,8 @@ func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testi
 	survivor := host.AddPeer(timedOut.Address, core.PeerStateConnected)
 
 	host.serviceTime = 32000
-	host.incomingBandwidth = 800
-	host.outgoingBandwidth = 1600
+	host.throttle.incomingBudget = 800
+	host.throttle.outgoingBudget = 1600
 	timedOut.RoundTripTime = 100
 	timedOut.RoundTripTimeVariance = 25
 	timedOut.TimeoutLimit = 32
@@ -423,13 +423,13 @@ func TestTimeoutDisconnectMarksBandwidthLimitsDirtyForLaterThrottlePass(t *testi
 	if event.Type != core.EventDisconnectTimeout {
 		t.Fatalf("event type = %d, want %d", event.Type, core.EventDisconnectTimeout)
 	}
-	if !host.recalculateBandwidthLimits {
+	if !host.throttle.needsRecalculation {
 		t.Fatal("recalculate bandwidth limits = false, want true")
 	}
 
-	host.bandwidthThrottleEpoch = 0
+	host.throttle.epoch = 0
 	host.serviceTime = 33000
-	host.bandwidthThrottle()
+	host.throttle.Run(host.serviceTime, host.peers, host.queueOutgoingControlCommand, host.logger)
 
 	if got := survivor.OutgoingCommands.Len(); got != 1 {
 		t.Fatalf("survivor outgoing command count = %d, want 1", got)
@@ -501,10 +501,10 @@ func TestServiceBandwidthThrottleIsNoOpBeforeEpochInterval(t *testing.T) {
 	raw := mustConnectedPeer(t, host)
 
 	host.serviceTime = 1500
-	host.bandwidthThrottleEpoch = 1000
-	host.outgoingBandwidth = 4000
-	host.incomingBandwidth = 4000
-	host.bandwidthLimitedPeers = 1
+	host.throttle.epoch = 1000
+	host.throttle.outgoingBudget = 4000
+	host.throttle.incomingBudget = 4000
+	host.throttle.limitedPeers = 1
 	raw.IncomingBandwidth = 1000
 	raw.OutgoingDataTotal = 900
 	raw.IncomingDataTotal = 800
@@ -531,16 +531,16 @@ func TestBandwidthThrottleClampsPacketThrottleLimitAndResetsDataTotals(t *testin
 	raw := mustConnectedPeer(t, host)
 
 	host.serviceTime = 2000
-	host.bandwidthThrottleEpoch = 0
-	host.outgoingBandwidth = 1000
-	host.bandwidthLimitedPeers = 1
+	host.throttle.epoch = 0
+	host.throttle.outgoingBudget = 1000
+	host.throttle.limitedPeers = 1
 	raw.IncomingBandwidth = 500
 	raw.OutgoingDataTotal = 4000
 	raw.IncomingDataTotal = 3000
 	raw.PacketThrottle = 32
 	raw.PacketThrottleLimit = 32
 
-	host.bandwidthThrottle()
+	host.throttle.Run(host.serviceTime, host.peers, host.queueOutgoingControlCommand, host.logger)
 
 	if raw.PacketThrottleLimit != 8 {
 		t.Fatalf("packet throttle limit = %d, want 8", raw.PacketThrottleLimit)
@@ -561,13 +561,13 @@ func TestBandwidthThrottleQueuesBandwidthLimitCommandWhenRecalculationRequested(
 	raw := mustConnectedPeer(t, host)
 
 	host.serviceTime = 2000
-	host.bandwidthThrottleEpoch = 0
-	host.incomingBandwidth = 800
-	host.outgoingBandwidth = 1600
-	host.recalculateBandwidthLimits = true
+	host.throttle.epoch = 0
+	host.throttle.incomingBudget = 800
+	host.throttle.outgoingBudget = 1600
+	host.throttle.needsRecalculation = true
 	raw.OutgoingBandwidth = 300
 
-	host.bandwidthThrottle()
+	host.throttle.Run(host.serviceTime, host.peers, host.queueOutgoingControlCommand, host.logger)
 
 	if got := raw.OutgoingCommands.Len(); got != 1 {
 		t.Fatalf("outgoing command count = %d, want 1", got)
