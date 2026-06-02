@@ -14,6 +14,7 @@ import (
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 	isocket "github.com/cafecito-games/goenet/internal/socket"
 	"github.com/cafecito-games/goenet/internal/testsupport"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReliableSendQueuesAcknowledgeableCommand(t *testing.T) {
@@ -77,6 +78,69 @@ func TestUnreliableSendDoesNotAdvanceReliableCounters(t *testing.T) {
 	}
 	if got := peer.Raw.Channels[0].OutgoingReliableSequenceNumber; got != 0 {
 		t.Fatalf("channel reliable sequence = %d", got)
+	}
+}
+
+func TestSendRejectsInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		arrange func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet)
+		wantErr error
+	}{
+		{
+			name: "nil peer",
+			arrange: func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet) {
+				t.Helper()
+				return nil, 0, &core.Packet{Data: []byte("abc")}
+			},
+			wantErr: ErrNilPeer,
+		},
+		{
+			name: "nil packet",
+			arrange: func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet) {
+				t.Helper()
+				return mustConnectedPeer(t, host), 0, nil
+			},
+			wantErr: ErrNilPacket,
+		},
+		{
+			name: "peer not connected",
+			arrange: func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet) {
+				t.Helper()
+				raw := mustConnectedPeer(t, host)
+				raw.State = core.PeerStateDisconnected
+				return raw, 0, &core.Packet{Data: []byte("abc")}
+			},
+			wantErr: ErrPeerNotConnected,
+		},
+		{
+			name: "channel out of range",
+			arrange: func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet) {
+				t.Helper()
+				return mustConnectedPeer(t, host), 1, &core.Packet{Data: []byte("abc")}
+			},
+			wantErr: ErrChannelOutOfRange,
+		},
+		{
+			name: "packet too large",
+			arrange: func(t *testing.T, host *Host) (*ipeer.Peer, uint8, *core.Packet) {
+				t.Helper()
+				host.config.MaximumPacketSize = 3
+				return mustConnectedPeer(t, host), 0, &core.Packet{Data: []byte("four")}
+			},
+			wantErr: ErrPacketTooLarge,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, _ := newTestHost(t)
+			raw, channelID, packet := tt.arrange(t, host)
+
+			err := host.Send(raw, channelID, packet)
+
+			require.ErrorIs(t, err, tt.wantErr)
+		})
 	}
 }
 

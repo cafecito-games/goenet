@@ -8,6 +8,7 @@ import (
 
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/testsupport"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPeerSessionIDForIndexUsesSeededRotation(t *testing.T) {
@@ -32,6 +33,13 @@ func TestPeerSessionIDForIndexUsesSeededRotation(t *testing.T) {
 			t.Fatalf("peerSessionIDForIndex(%d, %d) = %d, want %d", tt.index, tt.seed, got, tt.want)
 		}
 	}
+}
+
+func TestCloseDelegatesToSocket(t *testing.T) {
+	sock := testsupport.NewFakeSocket()
+	host := NewHost(core.Config{PeerCount: 1, ChannelLimit: 1}, sock, 77)
+
+	require.NoError(t, host.Close())
 }
 
 func TestConnectLogsEngineComponent(t *testing.T) {

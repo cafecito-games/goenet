@@ -16,6 +16,8 @@ import (
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/testsupport"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestListenReturnsUsableHost(t *testing.T) {
@@ -957,6 +959,190 @@ func TestBroadcastFansOutToConnectedPeersOnly(t *testing.T) {
 	}
 	if connected.State() != PeerStateConnected {
 		t.Fatalf("connected peer state = %d, want %d", connected.State(), PeerStateConnected)
+	}
+}
+
+func TestPublicSendSurfacesExportedSentinels(t *testing.T) {
+	tests := []struct {
+		name    string
+		act     func(t *testing.T) error
+		wantErr error
+	}{
+		{
+			name: "nil peer send",
+			act: func(t *testing.T) error {
+				t.Helper()
+				var peer *Peer
+				return peer.Send(0, &Packet{Data: []byte("abc"), Flags: PacketFlagReliable})
+			},
+			wantErr: ErrNilPeer,
+		},
+		{
+			name: "nil packet",
+			act: func(t *testing.T) error {
+				t.Helper()
+				host, sock := newTestHost()
+				peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+				return peer.Send(0, nil)
+			},
+			wantErr: ErrNilPacket,
+		},
+		{
+			name: "channel out of range",
+			act: func(t *testing.T) error {
+				t.Helper()
+				host, sock := newTestHost()
+				peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+				return peer.Send(1, &Packet{Data: []byte("abc")})
+			},
+			wantErr: ErrChannelOutOfRange,
+		},
+		{
+			name: "packet too large",
+			act: func(t *testing.T) error {
+				t.Helper()
+				host, sock := newConfiguredTestHost(Config{
+					PeerCount:         1,
+					ChannelLimit:      1,
+					MaximumPacketSize: 3,
+				})
+				peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+				return peer.Send(0, &Packet{Data: []byte("four")})
+			},
+			wantErr: ErrPacketTooLarge,
+		},
+		{
+			name: "broadcast nil packet",
+			act: func(t *testing.T) error {
+				t.Helper()
+				host, sock := newTestHost()
+				_ = mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+				return host.Broadcast(0, nil)
+			},
+			wantErr: ErrNilPacket,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.act(t)
+
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestInvalidPeerHandleAccessorsAndOperations(t *testing.T) {
+	tests := []struct {
+		name      string
+		peer      *Peer
+		wantState PeerState
+		wantErr   error
+	}{
+		{
+			name:      "nil peer",
+			peer:      nil,
+			wantState: PeerStateDisconnected,
+			wantErr:   ErrNilPeer,
+		},
+		{
+			name:      "hostless peer",
+			peer:      &Peer{state: PeerStateConnected},
+			wantState: PeerStateConnected,
+			wantErr:   ErrNilPeer,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantState, tt.peer.State())
+			assert.Nil(t, tt.peer.RemoteAddr())
+			assert.False(t, tt.peer.RemoteAddrPort().IsValid())
+
+			operations := []struct {
+				name string
+				act  func() error
+			}{
+				{name: "Send", act: func() error {
+					return tt.peer.Send(0, &Packet{Data: []byte("abc")})
+				}},
+				{name: "Disconnect", act: func() error {
+					return tt.peer.Disconnect(context.Background(), 1)
+				}},
+				{name: "DisconnectNow", act: func() error {
+					return tt.peer.DisconnectNow(context.Background(), 1)
+				}},
+				{name: "DisconnectLater", act: func() error {
+					return tt.peer.DisconnectLater(context.Background(), 1)
+				}},
+			}
+			for _, op := range operations {
+				t.Run(op.name, func(t *testing.T) {
+					require.ErrorIs(t, op.act(), tt.wantErr)
+				})
+			}
+			require.NotPanics(t, func() { tt.peer.Reset() })
+		})
+	}
+}
+
+func TestClosedHostAndPeerOperationsReturnErrHostClosed(t *testing.T) {
+	host, sock := newTestHost()
+	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+	require.NoError(t, host.Close())
+
+	hostOperations := []struct {
+		name string
+		act  func() error
+	}{
+		{name: "Flush", act: func() error {
+			return host.Flush(context.Background())
+		}},
+		{name: "Service", act: func() error {
+			_, err := host.Service(context.Background(), 0)
+			return err
+		}},
+		{name: "Broadcast", act: func() error {
+			return host.Broadcast(0, &Packet{Data: []byte("abc")})
+		}},
+		{name: "BandwidthLimit", act: func() error {
+			return host.BandwidthLimit(1, 2)
+		}},
+		{name: "Connect", act: func() error {
+			_, err := host.Connect("127.0.0.1:9002", 1, 1)
+			return err
+		}},
+	}
+	for _, op := range hostOperations {
+		t.Run("host "+op.name, func(t *testing.T) {
+			require.ErrorIs(t, op.act(), ErrHostClosed)
+		})
+	}
+
+	assert.Nil(t, peer.RemoteAddr())
+	assert.False(t, peer.RemoteAddrPort().IsValid())
+
+	peerOperations := []struct {
+		name string
+		act  func() error
+	}{
+		{name: "Send", act: func() error {
+			return peer.Send(0, &Packet{Data: []byte("abc")})
+		}},
+		{name: "Disconnect", act: func() error {
+			return peer.Disconnect(context.Background(), 1)
+		}},
+		{name: "DisconnectNow", act: func() error {
+			return peer.DisconnectNow(context.Background(), 1)
+		}},
+		{name: "DisconnectLater", act: func() error {
+			return peer.DisconnectLater(context.Background(), 1)
+		}},
+	}
+	for _, op := range peerOperations {
+		t.Run("peer "+op.name, func(t *testing.T) {
+			require.ErrorIs(t, op.act(), ErrHostClosed)
+		})
 	}
 }
 

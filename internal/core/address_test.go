@@ -6,6 +6,9 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewAddressRejectsZonedIPv6(t *testing.T) {
@@ -39,25 +42,41 @@ func TestAddressEqual(t *testing.T) {
 	c := mustAddress(t, "127.0.0.1:2", 0)
 	d := mustAddress(t, "[fe80::1]:1", 1)
 	e := mustAddress(t, "[fe80::1]:1", 2)
-	if !a.Equal(b) {
-		t.Error("a should equal b")
+
+	tests := []struct {
+		name  string
+		left  Address
+		right Address
+		want  bool
+	}{
+		{name: "same address", left: a, right: b, want: true},
+		{name: "different port", left: a, right: c, want: false},
+		{name: "different scope", left: d, right: e, want: false},
 	}
-	if a.Equal(c) {
-		t.Error("a should not equal c (different port)")
-	}
-	if d.Equal(e) {
-		t.Error("d should not equal e (different scope)")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.left.Equal(tt.right))
+		})
 	}
 }
 
 func TestAddressString(t *testing.T) {
-	a := mustAddress(t, "127.0.0.1:1234", 0)
-	if got, want := a.String(), "127.0.0.1:1234"; got != want {
-		t.Errorf("got %q want %q", got, want)
+	tests := []struct {
+		name     string
+		addrPort string
+		scopeID  uint32
+		want     string
+	}{
+		{name: "ipv4 without scope", addrPort: "127.0.0.1:1234", scopeID: 0, want: "127.0.0.1:1234"},
+		{name: "ipv6 with numeric scope", addrPort: "[fe80::1]:1234", scopeID: 7, want: "[fe80::1%7]:1234"},
 	}
-	b := mustAddress(t, "[fe80::1]:1234", 7)
-	if got, want := b.String(), "[fe80::1%7]:1234"; got != want {
-		t.Errorf("got %q want %q", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addr := mustAddress(t, tt.addrPort, tt.scopeID)
+			assert.Equal(t, tt.want, addr.String())
+		})
 	}
 }
 
@@ -68,61 +87,56 @@ func TestDefaultConfigPeerCount(t *testing.T) {
 	}
 }
 
-func TestAddressFromAddrPortIPv4StripsZeroScope(t *testing.T) {
-	got, err := AddressFromAddrPort(netip.MustParseAddrPort("127.0.0.1:7777"))
-	if err != nil {
-		t.Fatalf("AddressFromAddrPort: %v", err)
+func TestAddressFromAddrPort(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantAddrPort    string
+		wantScopeID     uint32
+		wantIPv4        bool
+		wantErrContains string
+	}{
+		{
+			name:         "ipv4 strips zero scope",
+			input:        "127.0.0.1:7777",
+			wantAddrPort: "127.0.0.1:7777",
+		},
+		{
+			name:         "preserves numeric ipv6 zone",
+			input:        "[fe80::1%7]:7777",
+			wantAddrPort: "[fe80::1]:7777",
+			wantScopeID:  7,
+		},
+		{
+			name:         "unmaps v4 in v6",
+			input:        "[::ffff:127.0.0.1]:9000",
+			wantAddrPort: "127.0.0.1:9000",
+			wantIPv4:     true,
+		},
+		{
+			name:            "rejects unknown interface zone",
+			input:           "[fe80::1%this-iface-should-not-exist]:1234",
+			wantErrContains: "this-iface-should-not-exist",
+		},
 	}
-	if got.AddrPort().String() != "127.0.0.1:7777" {
-		t.Fatalf("AddrPort = %q", got.AddrPort())
-	}
-	if got.ScopeID() != 0 {
-		t.Fatalf("ScopeID = %d, want 0", got.ScopeID())
-	}
-}
 
-func TestAddressFromAddrPortPreservesNumericIPv6Zone(t *testing.T) {
-	got, err := AddressFromAddrPort(netip.MustParseAddrPort("[fe80::1%7]:7777"))
-	if err != nil {
-		t.Fatalf("AddressFromAddrPort: %v", err)
-	}
-	if got.ScopeID() != 7 {
-		t.Fatalf("ScopeID = %d, want 7", got.ScopeID())
-	}
-	// AddrPort returned by Address must be unzoned — the scope lives in the
-	// dedicated ScopeID field so equality and lookups don't carry the zone
-	// twice.
-	if got.AddrPort().Addr().Zone() != "" {
-		t.Fatalf("zone leaked into AddrPort: %q", got.AddrPort().Addr().Zone())
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := AddressFromAddrPort(netip.MustParseAddrPort(tt.input))
+			if tt.wantErrContains != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContains)
+				return
+			}
 
-func TestAddressFromAddrPortUnmapsV4InV6(t *testing.T) {
-	// Go's resolver sometimes returns IPv4 addresses as ::ffff:0:0/96-mapped
-	// v6. AddressFromAddrPort must collapse them back to v4 so equality with
-	// a peer's natural v4 form works.
-	got, err := AddressFromAddrPort(netip.MustParseAddrPort("[::ffff:127.0.0.1]:9000"))
-	if err != nil {
-		t.Fatalf("AddressFromAddrPort: %v", err)
-	}
-	if !got.AddrPort().Addr().Is4() {
-		t.Fatalf("expected v4 address after unmap, got %v", got.AddrPort().Addr())
-	}
-	if got.AddrPort().String() != "127.0.0.1:9000" {
-		t.Fatalf("AddrPort = %q", got.AddrPort())
-	}
-}
-
-func TestAddressFromAddrPortRejectsUnknownInterfaceZone(t *testing.T) {
-	// Non-numeric zones are resolved against net.InterfaceByName. A definitely-
-	// nonexistent name must surface as an error rather than silently zero-ing
-	// the scope.
-	_, err := AddressFromAddrPort(netip.MustParseAddrPort("[fe80::1%this-iface-should-not-exist]:1234"))
-	if err == nil {
-		t.Fatal("expected error for unknown interface zone")
-	}
-	if !strings.Contains(err.Error(), "this-iface-should-not-exist") {
-		t.Fatalf("error should name the bad zone: %v", err)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAddrPort, got.AddrPort().String())
+			assert.Equal(t, tt.wantScopeID, got.ScopeID())
+			assert.Empty(t, got.AddrPort().Addr().Zone())
+			if tt.wantIPv4 {
+				assert.True(t, got.AddrPort().Addr().Is4())
+			}
+		})
 	}
 }
 

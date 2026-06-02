@@ -12,7 +12,182 @@ import (
 	"time"
 
 	"github.com/cafecito-games/goenet/internal/core"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestReadPacketReturnsSuccessfulDatagram(t *testing.T) {
+	deadlineSet := false
+	socket := &UDP{
+		logger: core.ComponentLogger(nil, "socket"),
+		setReadDeadline: func(deadline time.Time) error {
+			deadlineSet = !deadline.IsZero()
+			return nil
+		},
+		readFromUDPAddrPort: func(buf []byte) (int, netip.AddrPort, error) {
+			return copy(buf, "abc"), netip.MustParseAddrPort("127.0.0.1:9001"), nil
+		},
+	}
+
+	buf := make([]byte, 32)
+	n, addr, err := socket.ReadPacket(context.Background(), buf)
+
+	require.NoError(t, err)
+	assert.True(t, deadlineSet)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, "abc", string(buf[:n]))
+	assert.Equal(t, "127.0.0.1:9001", addr.AddrPort().String())
+}
+
+func TestReadPacketRetriesTimeoutUntilSuccess(t *testing.T) {
+	readCalls := 0
+	socket := &UDP{
+		logger:          core.ComponentLogger(nil, "socket"),
+		setReadDeadline: func(time.Time) error { return nil },
+		readFromUDPAddrPort: func(buf []byte) (int, netip.AddrPort, error) {
+			readCalls++
+			if readCalls == 1 {
+				return 0, netip.AddrPort{}, timeoutError{}
+			}
+			return copy(buf, "ok"), netip.MustParseAddrPort("127.0.0.1:9002"), nil
+		},
+	}
+
+	buf := make([]byte, 32)
+	n, addr, err := socket.ReadPacket(context.Background(), buf)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, readCalls)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, "ok", string(buf[:n]))
+	assert.Equal(t, "127.0.0.1:9002", addr.AddrPort().String())
+}
+
+func TestReadPacketLogsDeadlineFailure(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	wantErr := errors.New("read deadline failed")
+	socket := &UDP{
+		logger: core.ComponentLogger(logger, "socket"),
+		setReadDeadline: func(time.Time) error {
+			return wantErr
+		},
+	}
+
+	_, _, err := socket.ReadPacket(context.Background(), make([]byte, 32))
+
+	require.ErrorIs(t, err, wantErr)
+	assert.True(t, handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "socket read deadline failed" &&
+			r.Level == slog.LevelError &&
+			r.Attrs["component"] == "socket" &&
+			errors.Is(attrError(r.Attrs["err"]), wantErr)
+	}))
+}
+
+func TestReadPacketLogsGenericReadFailure(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	wantErr := errors.New("read failed")
+	socket := &UDP{
+		logger:          core.ComponentLogger(logger, "socket"),
+		setReadDeadline: func(time.Time) error { return nil },
+		readFromUDPAddrPort: func([]byte) (int, netip.AddrPort, error) {
+			return 0, netip.AddrPort{}, wantErr
+		},
+	}
+
+	_, _, err := socket.ReadPacket(context.Background(), make([]byte, 32))
+
+	require.ErrorIs(t, err, wantErr)
+	assert.True(t, handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "socket read failed" &&
+			r.Level == slog.LevelError &&
+			r.Attrs["component"] == "socket" &&
+			errors.Is(attrError(r.Attrs["err"]), wantErr)
+	}))
+}
+
+func TestReadPacketReturnsAddressConversionFailure(t *testing.T) {
+	socket := &UDP{
+		logger:          core.ComponentLogger(nil, "socket"),
+		setReadDeadline: func(time.Time) error { return nil },
+		readFromUDPAddrPort: func([]byte) (int, netip.AddrPort, error) {
+			return 0, netip.MustParseAddrPort("[fe80::1%this-iface-should-not-exist]:9001"), nil
+		},
+	}
+
+	_, _, err := socket.ReadPacket(context.Background(), make([]byte, 32))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "this-iface-should-not-exist")
+}
+
+func TestWritePacketReturnsSuccessfulDatagram(t *testing.T) {
+	addr := mustAddress(t, "127.0.0.1:9001")
+	deadlineSet := false
+	socket := &UDP{
+		logger: core.ComponentLogger(nil, "socket"),
+		setWriteDeadline: func(deadline time.Time) error {
+			deadlineSet = !deadline.IsZero()
+			return nil
+		},
+		writeToUDP: func(payload []byte, udpAddr *net.UDPAddr) (int, error) {
+			assert.Equal(t, "abc", string(payload))
+			assert.Equal(t, "127.0.0.1:9001", udpAddr.String())
+			return len(payload), nil
+		},
+	}
+
+	n, err := socket.WritePacket(context.Background(), addr, []byte("abc"))
+
+	require.NoError(t, err)
+	assert.True(t, deadlineSet)
+	assert.Equal(t, 3, n)
+}
+
+func TestWritePacketRetriesTimeoutUntilSuccess(t *testing.T) {
+	writeCalls := 0
+	socket := &UDP{
+		logger:           core.ComponentLogger(nil, "socket"),
+		setWriteDeadline: func(time.Time) error { return nil },
+		writeToUDP: func(payload []byte, _ *net.UDPAddr) (int, error) {
+			writeCalls++
+			if writeCalls == 1 {
+				return 0, timeoutError{}
+			}
+			return len(payload), nil
+		},
+	}
+
+	n, err := socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, writeCalls)
+	assert.Equal(t, 3, n)
+}
+
+func TestWritePacketLogsDeadlineFailure(t *testing.T) {
+	handler := newCaptureHandler()
+	logger := slog.New(handler)
+	wantErr := errors.New("write deadline failed")
+	socket := &UDP{
+		logger: core.ComponentLogger(logger, "socket"),
+		setWriteDeadline: func(time.Time) error {
+			return wantErr
+		},
+	}
+
+	_, err := socket.WritePacket(context.Background(), mustAddress(t, "127.0.0.1:9001"), []byte("abc"))
+
+	require.ErrorIs(t, err, wantErr)
+	assert.True(t, handler.Contains(func(r capturedRecord) bool {
+		return r.Message == "socket write deadline failed" &&
+			r.Level == slog.LevelError &&
+			r.Attrs["component"] == "socket" &&
+			errors.Is(attrError(r.Attrs["err"]), wantErr)
+	}))
+}
 
 func TestReadPacketReturnsContextCanceledWithoutDeadline(t *testing.T) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -116,6 +291,15 @@ func TestWritePacketSuppressesClosedConnErrorLog(t *testing.T) {
 	if len(handler.snapshot()) != 0 {
 		t.Fatal("expected closed connection errors to be silent")
 	}
+}
+
+func TestCloseClosesUnderlyingUDPConn(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+
+	socket := NewUDP(conn, nil)
+
+	require.NoError(t, socket.Close())
 }
 
 func TestReadPacketSuppressesConnRefusedWithDebugLog(t *testing.T) {

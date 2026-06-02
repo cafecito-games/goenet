@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	goenet "github.com/cafecito-games/goenet/pkg"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewAddressPreservesIPv6AddrPortAndScopeID(t *testing.T) {
@@ -30,29 +31,39 @@ func TestNewAddressRejectsZonedAddrPort(t *testing.T) {
 }
 
 func TestEventTypeValuesMatchENet(t *testing.T) {
-	if goenet.EventNone != 0 {
-		t.Fatalf("EventNone = %d", goenet.EventNone)
+	tests := []struct {
+		name string
+		got  goenet.EventType
+		want uint8
+	}{
+		{name: "EventNone", got: goenet.EventNone, want: 0},
+		{name: "EventConnect", got: goenet.EventConnect, want: 1},
+		{name: "EventDisconnect", got: goenet.EventDisconnect, want: 2},
+		{name: "EventReceive", got: goenet.EventReceive, want: 3},
+		{name: "EventDisconnectTimeout", got: goenet.EventDisconnectTimeout, want: 4},
 	}
-	if goenet.EventConnect != 1 {
-		t.Fatalf("EventConnect = %d", goenet.EventConnect)
-	}
-	if goenet.EventDisconnect != 2 {
-		t.Fatalf("EventDisconnect = %d", goenet.EventDisconnect)
-	}
-	if goenet.EventReceive != 3 {
-		t.Fatalf("EventReceive = %d", goenet.EventReceive)
-	}
-	if goenet.EventDisconnectTimeout != 4 {
-		t.Fatalf("EventDisconnectTimeout = %d", goenet.EventDisconnectTimeout)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, uint8(tt.got))
+		})
 	}
 }
 
 func TestPacketFlagValuesMatchENet(t *testing.T) {
-	if goenet.PacketFlagReliable != 1 {
-		t.Fatalf("PacketFlagReliable = %d", goenet.PacketFlagReliable)
+	tests := []struct {
+		name string
+		got  goenet.PacketFlag
+		want uint32
+	}{
+		{name: "PacketFlagReliable", got: goenet.PacketFlagReliable, want: 1},
+		{name: "PacketFlagUnsequenced", got: goenet.PacketFlagUnsequenced, want: 2},
 	}
-	if goenet.PacketFlagUnsequenced != 2 {
-		t.Fatalf("PacketFlagUnsequenced = %d", goenet.PacketFlagUnsequenced)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, uint32(tt.got))
+		})
 	}
 }
 
