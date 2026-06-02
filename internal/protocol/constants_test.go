@@ -4,58 +4,54 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/goenet/internal/protocol"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestProtocolConstantsMatchENet(t *testing.T) {
-	if protocol.MinimumMTU != 576 {
-		t.Fatalf("MinimumMTU = %d", protocol.MinimumMTU)
+	tests := []struct {
+		name string
+		got  uint64
+		want uint64
+	}{
+		{name: "MinimumMTU", got: uint64(protocol.MinimumMTU), want: 576},
+		{name: "MaximumMTU", got: uint64(protocol.MaximumMTU), want: 4096},
+		{name: "MaximumPacketCommands", got: uint64(protocol.MaximumPacketCommands), want: 32},
+		{name: "CommandAcknowledge", got: uint64(protocol.CommandAcknowledge), want: 1},
+		{name: "CommandConnect", got: uint64(protocol.CommandConnect), want: 2},
+		{name: "CommandVerifyConnect", got: uint64(protocol.CommandVerifyConnect), want: 3},
+		{name: "CommandDisconnect", got: uint64(protocol.CommandDisconnect), want: 4},
+		{name: "CommandPing", got: uint64(protocol.CommandPing), want: 5},
+		{name: "CommandSendReliable", got: uint64(protocol.CommandSendReliable), want: 6},
+		{name: "CommandSendUnreliable", got: uint64(protocol.CommandSendUnreliable), want: 7},
+		{name: "CommandSendFragment", got: uint64(protocol.CommandSendFragment), want: 8},
+		{name: "CommandSendUnsequenced", got: uint64(protocol.CommandSendUnsequenced), want: 9},
+		{name: "CommandBandwidthLimit", got: uint64(protocol.CommandBandwidthLimit), want: 10},
+		{name: "CommandThrottleConfigure", got: uint64(protocol.CommandThrottleConfigure), want: 11},
+		{name: "CommandSendUnreliableFragment", got: uint64(protocol.CommandSendUnreliableFragment), want: 12},
+		{name: "CommandFlagUnsequenced", got: uint64(protocol.CommandFlagUnsequenced), want: 1 << 6},
+		{name: "CommandFlagAcknowledge", got: uint64(protocol.CommandFlagAcknowledge), want: 1 << 7},
 	}
-	if protocol.MaximumMTU != 4096 {
-		t.Fatalf("MaximumMTU = %d", protocol.MaximumMTU)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.got)
+		})
 	}
-	if protocol.MaximumPacketCommands != 32 {
-		t.Fatalf("MaximumPacketCommands = %d", protocol.MaximumPacketCommands)
+}
+
+func TestHeaderSize(t *testing.T) {
+	tests := []struct {
+		name         string
+		withSentTime bool
+		want         int
+	}{
+		{name: "minimal", withSentTime: false, want: protocol.HeaderSizeMinimal},
+		{name: "with sent time", withSentTime: true, want: protocol.HeaderSizeWithSentTime},
 	}
-	if protocol.CommandAcknowledge != 1 {
-		t.Fatalf("CommandAcknowledge = %d", protocol.CommandAcknowledge)
-	}
-	if protocol.CommandConnect != 2 {
-		t.Fatalf("CommandConnect = %d", protocol.CommandConnect)
-	}
-	if protocol.CommandVerifyConnect != 3 {
-		t.Fatalf("CommandVerifyConnect = %d", protocol.CommandVerifyConnect)
-	}
-	if protocol.CommandDisconnect != 4 {
-		t.Fatalf("CommandDisconnect = %d", protocol.CommandDisconnect)
-	}
-	if protocol.CommandPing != 5 {
-		t.Fatalf("CommandPing = %d", protocol.CommandPing)
-	}
-	if protocol.CommandSendReliable != 6 {
-		t.Fatalf("CommandSendReliable = %d", protocol.CommandSendReliable)
-	}
-	if protocol.CommandSendUnreliable != 7 {
-		t.Fatalf("CommandSendUnreliable = %d", protocol.CommandSendUnreliable)
-	}
-	if protocol.CommandSendFragment != 8 {
-		t.Fatalf("CommandSendFragment = %d", protocol.CommandSendFragment)
-	}
-	if protocol.CommandSendUnsequenced != 9 {
-		t.Fatalf("CommandSendUnsequenced = %d", protocol.CommandSendUnsequenced)
-	}
-	if protocol.CommandBandwidthLimit != 10 {
-		t.Fatalf("CommandBandwidthLimit = %d", protocol.CommandBandwidthLimit)
-	}
-	if protocol.CommandThrottleConfigure != 11 {
-		t.Fatalf("CommandThrottleConfigure = %d", protocol.CommandThrottleConfigure)
-	}
-	if protocol.CommandSendUnreliableFragment != 12 {
-		t.Fatalf("CommandSendUnreliableFragment = %d", protocol.CommandSendUnreliableFragment)
-	}
-	if protocol.CommandFlagUnsequenced != 1<<6 {
-		t.Fatalf("CommandFlagUnsequenced = 0x%02x", protocol.CommandFlagUnsequenced)
-	}
-	if protocol.CommandFlagAcknowledge != 1<<7 {
-		t.Fatalf("CommandFlagAcknowledge = 0x%02x", protocol.CommandFlagAcknowledge)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, protocol.HeaderSize(tt.withSentTime))
+		})
 	}
 }

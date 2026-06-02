@@ -4,23 +4,25 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/goenet/internal/timeutil"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestDifferenceMatchesENetWithoutWrap(t *testing.T) {
-	const a uint32 = 1000
-	const b uint32 = 2000
-
-	if got := timeutil.Difference(a, b); got != 1000 {
-		t.Fatalf("Difference() = %d, want 1000", got)
+func TestDifferenceMatchesENet(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b uint32
+		want uint32
+	}{
+		{name: "forward without wrap", a: 2000, b: 1000, want: 1000},
+		{name: "reverse within overflow window", a: 1000, b: 2000, want: 1000},
+		{name: "across wrap boundary", a: 10, b: timeutil.TimeOverflow - 5, want: 86399985},
+		{name: "equal", a: 1000, b: 1000, want: 0},
 	}
-}
 
-func TestDifferenceMatchesENetMacroAcrossWrapBoundary(t *testing.T) {
-	const a uint32 = 10
-	const b uint32 = timeutil.TimeOverflow - 5
-
-	if got := timeutil.Difference(a, b); got != 86399985 {
-		t.Fatalf("Difference() = %d, want 86399985", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, timeutil.Difference(tc.a, tc.b))
+		})
 	}
 }
 
@@ -41,9 +43,7 @@ func TestLessAcrossWrap(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := timeutil.Less(tc.a, tc.b); got != tc.want {
-				t.Errorf("Less(%d,%d) = %v want %v", tc.a, tc.b, got, tc.want)
-			}
+			assert.Equal(t, tc.want, timeutil.Less(tc.a, tc.b))
 		})
 	}
 }

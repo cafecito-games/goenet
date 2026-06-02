@@ -302,6 +302,9 @@ func cloneNetAddr(addr net.Addr) net.Addr {
 	if !ok {
 		return addr
 	}
+	if udpAddr == nil {
+		return nil
+	}
 
 	cloned := *udpAddr
 	if udpAddr.IP != nil {

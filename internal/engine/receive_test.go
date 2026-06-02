@@ -10,6 +10,8 @@ import (
 	ipeer "github.com/cafecito-games/goenet/internal/peer"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
 	"github.com/cafecito-games/goenet/internal/testsupport"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServiceCompletesServerSideConnectFlow(t *testing.T) {
@@ -222,6 +224,53 @@ func TestServiceReassemblesReliableFragmentsBeforeDispatch(t *testing.T) {
 	if got := sock.WriteCount(); got != 2 {
 		t.Fatalf("total WriteCount = %d, want 2", got)
 	}
+}
+
+func TestServiceReassemblesUnreliableFragmentsBeforeDispatch(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+
+	queueFragment := func(fragmentNumber uint32, offset uint32, data string) {
+		sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+			iprotocol.Header{
+				PeerID:    raw.IncomingPeerID,
+				SessionID: raw.IncomingSessionID,
+			},
+			iprotocol.SendFragment{
+				Header: iprotocol.CommandHeader{
+					Command:                iprotocol.CommandSendUnreliableFragment,
+					ChannelID:              0,
+					ReliableSequenceNumber: 0,
+				},
+				StartSequenceNumber: 1,
+				FragmentCount:       2,
+				FragmentNumber:      fragmentNumber,
+				TotalLength:         10,
+				FragmentOffset:      offset,
+				Data:                []byte(data),
+			},
+		))
+	}
+
+	queueFragment(0, 0, "hello")
+
+	event, err := host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, core.EventNone, event.Type)
+	assert.Equal(t, 0, sock.WriteCount())
+
+	queueFragment(1, 5, "world")
+
+	event, err = host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, core.EventReceive, event.Type)
+	require.NotNil(t, event.Packet)
+	assert.Equal(t, "helloworld", string(event.Packet.Data))
+	assert.Equal(t, core.PacketFlag(0), event.Packet.Flags)
+	assert.Equal(t, uint32(0), raw.TotalWaitingData)
+	assert.Equal(t, 0, sock.WriteCount())
 }
 
 func TestServiceStopsAfterFirstAckBearingCommandWithoutSentTime(t *testing.T) {
@@ -683,6 +732,57 @@ func TestServiceRejectsZeroLengthReliableFragment(t *testing.T) {
 	if got := sock.WriteCount(); got != 0 {
 		t.Fatalf("WriteCount = %d", got)
 	}
+}
+
+func TestServiceAppliesInboundBandwidthLimitAndThrottleConfigure(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	host.BandwidthLimit(4096, 8192)
+	host.throttle.needsRecalculation = false
+
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+	raw.IncomingBandwidth = 64
+	raw.PacketThrottleInterval = 1
+	raw.PacketThrottleAcceleration = 1
+	raw.PacketThrottleDeceleration = 1
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+		},
+		iprotocol.BandwidthLimit{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0xFF,
+				ReliableSequenceNumber: 1,
+			},
+			IncomingBandwidth: 1024,
+			OutgoingBandwidth: 2048,
+		},
+		iprotocol.ThrottleConfigure{
+			Header: iprotocol.CommandHeader{
+				ChannelID:              0xFF,
+				ReliableSequenceNumber: 2,
+			},
+			PacketThrottleInterval:     5000,
+			PacketThrottleAcceleration: 2,
+			PacketThrottleDeceleration: 3,
+		},
+	))
+
+	event, err := host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, core.EventNone, event.Type)
+	assert.Equal(t, uint32(1024), raw.IncomingBandwidth)
+	assert.Equal(t, uint32(2048), raw.OutgoingBandwidth)
+	assert.Equal(t, negotiatedPeerWindowSize(host.throttle.OutgoingBudget(), raw.IncomingBandwidth), host.runtime[raw].windowSize)
+	assert.True(t, host.throttle.needsRecalculation)
+	assert.Equal(t, uint32(1), host.throttle.limitedPeers)
+	assert.Equal(t, uint32(5000), raw.PacketThrottleInterval)
+	assert.Equal(t, uint32(2), raw.PacketThrottleAcceleration)
+	assert.Equal(t, uint32(3), raw.PacketThrottleDeceleration)
+	assert.Equal(t, 0, sock.WriteCount())
 }
 
 func TestServiceHandlesRemoteDisconnectAndResetsPeerSlot(t *testing.T) {
