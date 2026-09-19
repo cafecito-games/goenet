@@ -288,6 +288,12 @@ func (h *Host) Flush(ctx context.Context) error {
 	}
 
 	for _, p := range h.peers {
+		// Most slots are idle or Disconnected on a large host. Timeouts, pings,
+		// and throttle updates reach Flush only as queued commands, so a peer
+		// with nothing queued has nothing Flush could do.
+		if !hasQueuedOutgoing(p) {
+			continue
+		}
 		if blocked := findUnsendableQueuedCommand(p, h.config.Checksum != nil); blocked != nil {
 			return fmt.Errorf(
 				"%w: command %d, peer mtu %d",
@@ -302,23 +308,13 @@ func (h *Host) Flush(ctx context.Context) error {
 				h.logger.Warn("flush budget exhausted", "peer_id", p.IncomingPeerID)
 				return nil
 			}
-			datagram, wroteAny, err := h.preparePeerDatagram(p)
+			wroteAny, err := h.flushPeerDatagram(ctx, p)
 			if err != nil {
 				return err
 			}
 			if !wroteAny {
 				break
 			}
-
-			n, err := h.socket.WritePacket(ctx, p.Address, datagram.payload)
-			if err != nil {
-				return err
-			}
-			if n != len(datagram.payload) {
-				return fmt.Errorf("%w: wrote %d of %d", ErrShortWrite, n, len(datagram.payload))
-			}
-
-			h.commitPreparedDatagram(p, datagram)
 			writeBudget--
 			if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
 				// Same as the receive-path call: always hits the no-flush branch.
@@ -330,6 +326,38 @@ func (h *Host) Flush(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// flushPeerDatagram prepares, writes, and commits at most one datagram for p.
+// It reports whether a datagram was written.
+func (h *Host) flushPeerDatagram(ctx context.Context, p *peer.Peer) (bool, error) {
+	// The prepared batch aliases h.selectionScratch; drop its command and
+	// acknowledgement references once this datagram is done, on every path.
+	defer h.releaseSelectionScratch()
+
+	datagram, wroteAny, err := h.preparePeerDatagram(p)
+	if err != nil || !wroteAny {
+		return false, err
+	}
+
+	n, err := h.socket.WritePacket(ctx, p.Address, datagram.payload)
+	if err != nil {
+		return false, err
+	}
+	if n != len(datagram.payload) {
+		return false, fmt.Errorf("%w: wrote %d of %d", ErrShortWrite, n, len(datagram.payload))
+	}
+
+	h.commitPreparedDatagram(p, datagram)
+	return true, nil
+}
+
+// hasQueuedOutgoing reports whether p has anything selectOutgoingBatch could
+// pick: a pending acknowledgement or a queued outgoing command. In-flight
+// reliable commands are excluded; they are resent only after checkTimeouts
+// moves them back onto an outgoing queue.
+func hasQueuedOutgoing(p *peer.Peer) bool {
+	return p.Acknowledgements.Len() > 0 || p.OutgoingSendReliableCommands.Len() > 0 || p.OutgoingCommands.Len() > 0
 }
 
 func findUnsendableQueuedCommand(p *peer.Peer, withChecksum bool) *peer.OutgoingCommand {
@@ -483,7 +511,11 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) (selected []outgoingSelection, 
 	reliableFront := p.OutgoingSendReliableCommands.Front()
 	outgoingFront := p.OutgoingCommands.Front()
 
-	selected = make([]outgoingSelection, 0, protocol.MaximumPacketCommands)
+	if ackFront == nil && reliableFront == nil && outgoingFront == nil {
+		return nil, nil
+	}
+
+	selected = h.selectionBuffer()
 	bodySize := 0
 	hasAck := false
 
@@ -527,6 +559,23 @@ func (h *Host) selectOutgoingBatch(p *peer.Peer) (selected []outgoingSelection, 
 	}
 
 	return selected, nil
+}
+
+// selectionBuffer returns the host's empty, reusable batch buffer. The result
+// is valid only until the next selectOutgoingBatch call; callers must not
+// retain it past committing (or abandoning) the datagram it describes.
+func (h *Host) selectionBuffer() []outgoingSelection {
+	if h.selectionScratch == nil {
+		h.selectionScratch = make([]outgoingSelection, 0, protocol.MaximumPacketCommands)
+	}
+	return h.selectionScratch[:0]
+}
+
+// releaseSelectionScratch zeroes the reusable batch buffer so it does not keep
+// sent commands, their packets, or acknowledgements reachable after they have
+// left the peer queues.
+func (h *Host) releaseSelectionScratch() {
+	clear(h.selectionScratch[:cap(h.selectionScratch)])
 }
 
 func buildSelection(cmd *peer.OutgoingCommand, fromReliableQueue bool) outgoingSelection {

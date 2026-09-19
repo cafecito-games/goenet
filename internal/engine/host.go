@@ -83,6 +83,12 @@ type Host struct {
 	intercepted   *Event
 	nextConnectID uint32
 	sessionIDSeed uint8
+	// selectionScratch backs the []outgoingSelection that selectOutgoingBatch
+	// returns, so Flush does not allocate a batch per datagram. One buffer per
+	// host is enough: every engine call runs under the public host mutex, and
+	// Flush sends and commits each prepared datagram (then clears the buffer)
+	// before it prepares the next one, so no two batches are ever live at once.
+	selectionScratch []outgoingSelection
 }
 
 // NewHost constructs an engine host around the provided socket and config snapshot.
