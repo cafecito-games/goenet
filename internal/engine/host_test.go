@@ -35,6 +35,26 @@ func TestPeerSessionIDForIndexUsesSeededRotation(t *testing.T) {
 	}
 }
 
+func TestPeerGenerationAdvancesAcrossResetAndSlotReuse(t *testing.T) {
+	sock := testsupport.NewFakeSocket()
+	host := NewHost(core.Config{PeerCount: 1, ChannelLimit: 1}, sock, 77)
+	raw := host.Peers()[0]
+	initialGeneration := raw.Generation
+
+	raw = host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	configuredGeneration := raw.Generation
+	require.Greater(t, configuredGeneration, initialGeneration)
+
+	raw.ConnectID = 0x11223344
+	host.Reset(raw)
+	require.Greater(t, raw.Generation, configuredGeneration)
+	require.Equal(t, uint32(0x11223344), raw.ConnectID)
+	resetGeneration := raw.Generation
+
+	raw = host.AddPeer(mustAddress(t, "127.0.0.1:9002"), core.PeerStateConnected)
+	require.Greater(t, raw.Generation, resetGeneration)
+}
+
 func TestCloseDelegatesToSocket(t *testing.T) {
 	sock := testsupport.NewFakeSocket()
 	host := NewHost(core.Config{PeerCount: 1, ChannelLimit: 1}, sock, 77)

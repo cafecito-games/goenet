@@ -171,6 +171,7 @@ defer host.Close()
 - `Disconnect` is graceful for connected peers. During handshake states it follows ENet's immediate unsequenced disconnect path and resets the peer locally after flush.
 - `Disconnect`, `DisconnectNow`, and `DisconnectLater` take a caller-provided `context.Context` because some disconnect paths perform synchronous flush work.
 - `DisconnectNow` always uses the immediate unsequenced path: notify the remote peer, flush immediately, and reset the local peer without waiting for a later disconnect event.
+- Any path that resets a peer locally—including `Reset`, `DisconnectNow`, and handshake-state `Disconnect` or `DisconnectLater`—invalidates that `Peer` handle immediately. Its operations then return `ErrNilPeer`, `State` reports `PeerStateDisconnected`, and its remote address is unavailable. If the engine reuses the slot, the new session receives a fresh handle; stale handles are never rebound.
 
 ## Examples
 

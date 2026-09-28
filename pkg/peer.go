@@ -47,17 +47,18 @@ const (
 // The handle remains valid up to and including the EventDisconnect or
 // EventDisconnectTimeout event for that peer. Once that terminal event is
 // returned from Service, the host detaches its internal binding from the
-// handle. Reset, DisconnectNow, and handshake-state Disconnect paths that
-// reset locally without a terminal event detach the handle immediately after
-// succeeding. Subsequent operations return ErrNilPeer; State returns
-// PeerStateDisconnected. Re-using the same engine peer slot for a new session
-// allocates a fresh public Peer; stale handles are never rebound.
+// handle. Any path that resets locally without a terminal event—including
+// Reset, DisconnectNow, and handshake-state Disconnect or DisconnectLater—
+// detaches the handle immediately after succeeding. Subsequent operations
+// return ErrNilPeer; State returns PeerStateDisconnected and remote-address
+// accessors report no address. Re-using the same engine peer slot for a new
+// session allocates a fresh public Peer; stale handles are never rebound.
 //
 // # Concurrency
 //
 // All public methods on Peer are safe for concurrent use. Field access on
-// Peer (raw, state) is synchronized via the owning Host's mutex; never read
-// p.raw or p.state outside that lock.
+// Peer (raw, generation, state) is synchronized via the owning Host's mutex;
+// never read those fields outside that lock.
 //
 // state is a cached copy of raw.State. It survives the moment translateEvent
 // clears raw on a terminal event so callers holding the handle past that
@@ -65,9 +66,10 @@ const (
 // default. While raw is non-nil, State() reads from it directly and refreshes
 // the cache as a side effect.
 type Peer struct {
-	host  *Host
-	raw   *peer.Peer
-	state PeerState
+	host       *Host
+	raw        *peer.Peer
+	generation uint64
+	state      PeerState
 }
 
 // lockedRaw acquires host.mu and returns the peer's currently-bound raw pointer.
@@ -86,6 +88,11 @@ func (p *Peer) lockedRaw() (*peer.Peer, error) {
 		p.host.mu.Unlock()
 		return nil, ErrNilPeer
 	}
+	if p.generation != p.raw.Generation {
+		p.host.detachPeer(p.raw, p)
+		p.host.mu.Unlock()
+		return nil, ErrNilPeer
+	}
 	return p.raw, nil
 }
 
@@ -99,6 +106,9 @@ func (p *Peer) State() PeerState {
 	}
 	p.host.mu.Lock()
 	defer p.host.mu.Unlock()
+	if p.raw != nil && p.generation != p.raw.Generation {
+		p.host.detachPeer(p.raw, p)
+	}
 	if p.raw != nil {
 		p.state = p.raw.State
 	}

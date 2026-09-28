@@ -29,6 +29,9 @@ type Peer struct {
 	OutgoingPeerID                 uint16
 	IncomingPeerID                 uint16
 	ConnectID                      uint32
+	// Generation is a host-local slot incarnation. It changes every time the
+	// engine reinitializes this peer storage and is never serialized on the wire.
+	Generation                     uint64
 	OutgoingSessionID              uint8
 	IncomingSessionID              uint8
 	MTU                            uint32
