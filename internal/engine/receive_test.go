@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
 	"testing"
 
@@ -690,6 +691,59 @@ func TestServiceRejectsInboundPayloadLargerThanMaximumPacketSize(t *testing.T) {
 	if got := sock.WriteCount(); got != 0 {
 		t.Fatalf("WriteCount = %d", got)
 	}
+}
+
+func TestServiceRejectsPingBeforePeerIsConnected(t *testing.T) {
+	host, sock := newReceiveHost(t, nil)
+	raw, err := host.Connect(mustAddress(t, "127.0.0.1:9001"), 1, 1)
+	require.NoError(t, err)
+
+	sock.QueueInbound(raw.Address.AddrPort(), marshalDatagram(
+		iprotocol.Header{
+			PeerID:   raw.IncomingPeerID,
+			Flags:    iprotocol.HeaderFlagSentTime,
+			SentTime: 1,
+		},
+		iprotocol.Ping{Header: iprotocol.CommandHeader{
+			ChannelID:              0xFF,
+			ReliableSequenceNumber: 2,
+		}},
+	))
+
+	_, err = host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	// Service flushes the already-queued Connect before reading. A rejected Ping
+	// must not add an acknowledgement datagram afterward.
+	assert.Equal(t, 1, sock.WriteCount())
+	assert.Zero(t, raw.Acknowledgements.Len())
+}
+
+func TestQueueUnreliableRejectsDuplicateAcrossReliableSequenceWrap(t *testing.T) {
+	host, _ := newReceiveHost(t, nil)
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	channel := raw.Channels[0]
+	channel.IncomingReliableSequenceNumber = math.MaxUint16 - 5
+
+	newCommand := func(reliable uint16) *ipeer.IncomingCommand {
+		return &ipeer.IncomingCommand{
+			ReliableSequenceNumber:   reliable,
+			UnreliableSequenceNumber: 7,
+			Command: ipeer.Command{Header: ipeer.Header{
+				Command:   iprotocol.CommandSendUnreliable,
+				ChannelID: 0,
+			}},
+			Packet: &core.Packet{Data: []byte{1}},
+		}
+	}
+
+	assert.Equal(t, inboundAccept, host.queueUnreliableIncomingCommand(raw, newCommand(math.MaxUint16)))
+	assert.Equal(t, inboundAccept, host.queueUnreliableIncomingCommand(raw, newCommand(0)))
+	waitingBefore := raw.TotalWaitingData
+	queuedBefore := channel.IncomingUnreliableCommands.Len()
+
+	assert.Equal(t, inboundIgnore, host.queueUnreliableIncomingCommand(raw, newCommand(math.MaxUint16)))
+	assert.Equal(t, queuedBefore, channel.IncomingUnreliableCommands.Len())
+	assert.Equal(t, waitingBefore, raw.TotalWaitingData)
 }
 
 func TestServiceRejectsZeroLengthReliableFragment(t *testing.T) {

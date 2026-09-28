@@ -47,11 +47,11 @@ const (
 // The handle remains valid up to and including the EventDisconnect or
 // EventDisconnectTimeout event for that peer. Once that terminal event is
 // returned from Service, the host detaches its internal binding from the
-// handle. Subsequent operations on the handle (Send, Disconnect*, Reset)
-// return ErrNilPeer; State returns PeerStateDisconnected. The handle is then
-// safe to drop. Re-using the same engine peer slot for a new session
-// allocates a fresh public Peer; there is no automatic re-binding of stale
-// handles.
+// handle. Reset, DisconnectNow, and handshake-state Disconnect paths that
+// reset locally without a terminal event detach the handle immediately after
+// succeeding. Subsequent operations return ErrNilPeer; State returns
+// PeerStateDisconnected. Re-using the same engine peer slot for a new session
+// allocates a fresh public Peer; stale handles are never rebound.
 //
 // # Concurrency
 //
@@ -147,10 +147,14 @@ func (p *Peer) Disconnect(ctx context.Context, data uint32) error {
 		return err
 	}
 	p.state = raw.State
+	if raw.State == core.PeerStateDisconnected {
+		p.host.detachPeer(raw, p)
+	}
 	return nil
 }
 
-// DisconnectNow forcefully notifies the remote peer, flushes immediately, and resets locally.
+// DisconnectNow forcefully notifies the remote peer, flushes immediately,
+// resets locally, and invalidates this handle.
 func (p *Peer) DisconnectNow(ctx context.Context, data uint32) error {
 	raw, err := p.lockedRaw()
 	if err != nil {
@@ -162,6 +166,9 @@ func (p *Peer) DisconnectNow(ctx context.Context, data uint32) error {
 		return err
 	}
 	p.state = raw.State
+	if raw.State == core.PeerStateDisconnected {
+		p.host.detachPeer(raw, p)
+	}
 	return nil
 }
 
@@ -177,10 +184,14 @@ func (p *Peer) DisconnectLater(ctx context.Context, data uint32) error {
 		return err
 	}
 	p.state = raw.State
+	if raw.State == core.PeerStateDisconnected {
+		p.host.detachPeer(raw, p)
+	}
 	return nil
 }
 
-// Reset immediately drops local peer state without a wire notification.
+// Reset immediately drops local peer state without a wire notification and
+// invalidates this handle.
 func (p *Peer) Reset() {
 	raw, err := p.lockedRaw()
 	if err != nil {
@@ -188,7 +199,7 @@ func (p *Peer) Reset() {
 	}
 	defer p.host.mu.Unlock()
 	p.host.engine.Reset(raw)
-	p.state = raw.State
+	p.host.detachPeer(raw, p)
 }
 
 func (p *Peer) remoteUDPAddr() *net.UDPAddr {

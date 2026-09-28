@@ -187,6 +187,9 @@ func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
 	}
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
+	if corePacket == nil {
+		return ErrNilPacket
+	}
 
 	var errs []error
 	for _, wrapped := range h.orderedPeers() {
@@ -363,13 +366,21 @@ func (h *Host) translateEvent(event engine.Event) Event {
 	// future re-use of the same engine peer slot allocates a fresh public Peer
 	// rather than keeping the caller's stale handle bound to a new session.
 	if event.Peer != nil && (event.Type == core.EventDisconnect || event.Type == core.EventDisconnectTimeout) {
-		if wrapped != nil {
-			wrapped.raw = nil
-			wrapped.state = PeerStateDisconnected
-		}
-		delete(h.peers, event.Peer)
+		h.detachPeer(event.Peer, wrapped)
 	}
 	return out
+}
+
+// detachPeer invalidates a public handle after an engine slot has been reset.
+// The caller must hold h.mu.
+func (h *Host) detachPeer(raw *peer.Peer, wrapped *Peer) {
+	if wrapped != nil {
+		wrapped.raw = nil
+		wrapped.state = PeerStateDisconnected
+	}
+	if raw != nil {
+		delete(h.peers, raw)
+	}
 }
 
 func durationMillis(timeout time.Duration) uint32 {
@@ -381,5 +392,9 @@ func durationMillis(timeout time.Duration) uint32 {
 		return math.MaxUint32
 	}
 
-	return uint32(timeout / time.Millisecond)
+	millis := timeout / time.Millisecond
+	if millis == 0 {
+		return 1
+	}
+	return uint32(millis)
 }

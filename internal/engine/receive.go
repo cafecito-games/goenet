@@ -10,6 +10,7 @@ import (
 	"github.com/cafecito-games/goenet/internal/core"
 	"github.com/cafecito-games/goenet/internal/peer"
 	"github.com/cafecito-games/goenet/internal/protocol"
+	"github.com/cafecito-games/goenet/internal/socket"
 	"github.com/cafecito-games/goenet/internal/timeutil"
 )
 
@@ -75,7 +76,11 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 	if err := h.Flush(ctx); err != nil {
 		return Event{}, err
 	}
-	if err := h.receiveIncoming(ctx); err != nil {
+	receiveCtx := ctx
+	if timeout == 0 {
+		receiveCtx = socket.WithNonblockingRead(ctx)
+	}
+	if err := h.receiveIncoming(receiveCtx); err != nil {
 		return Event{}, err
 	}
 	if h.intercepted != nil {
@@ -95,8 +100,9 @@ func (h *Host) Service(ctx context.Context, timeout uint32) (Event, error) {
 
 func (h *Host) receiveIncoming(ctx context.Context) error {
 	buf := make([]byte, maximumUDPDatagramSize)
+	readCtx := ctx
 	for packets := 0; packets < 256; packets++ {
-		n, addr, err := h.socket.ReadPacket(ctx, buf)
+		n, addr, err := h.socket.ReadPacket(readCtx, buf)
 		if err != nil {
 			// EOF or a tick-scoped deadline both mean "no more packets to drain".
 			if errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) {
@@ -107,6 +113,10 @@ func (h *Host) receiveIncoming(ctx context.Context) error {
 		if err := h.handleIncomingDatagram(buf[:n], addr); err != nil {
 			return err
 		}
+		// Once one datagram has arrived, drain only what the kernel has already
+		// buffered. Waiting again would delay a ready event until the original
+		// Service timeout expires.
+		readCtx = socket.WithNonblockingRead(ctx)
 	}
 
 	return nil
@@ -130,7 +140,6 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 			return nil
 		}
 	}
-
 	header, ok := parseHeader(payload)
 	if !ok {
 		h.logger.Debug("datagram rejected", "reason", "parse_header", "len", len(payload), "addr", addr.AddrPort())
@@ -161,15 +170,6 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 		)
 		return nil
 	}
-	if currentPeer != nil {
-		currentPeer.IncomingDataTotal += checkedUint32FromInt(len(payload))
-		// Track liveness for any inbound traffic, not just ACKs (matches C
-		// enet_protocol_handle_incoming_commands setting peer->lastReceiveTime).
-		// Without this, idle-timeout / ping-keepalive logic misclassify an
-		// actively-sending peer whose ACKs were dropped as silent.
-		currentPeer.LastReceiveTime = maxUint32(h.serviceTime, 1)
-	}
-
 	workingPayload := payload
 	if header.Flags&protocol.HeaderFlagCompressed != 0 {
 		if h.config.Compressor == nil {
@@ -203,6 +203,13 @@ func (h *Host) handleIncomingDatagram(payload []byte, addr core.Address) error {
 			h.logger.Debug("datagram rejected", "reason", "checksum_mismatch", "addr", addr.AddrPort())
 			return nil
 		}
+	}
+	if currentPeer != nil {
+		// Only authenticated/decompressed traffic counts toward bandwidth and
+		// liveness. Otherwise a bad-checksum datagram could keep a peer alive and
+		// distort its throttle accounting.
+		currentPeer.IncomingDataTotal += checkedUint32FromInt(len(payload))
+		currentPeer.LastReceiveTime = maxUint32(h.serviceTime, 1)
 	}
 
 	for offset < len(workingPayload) {
@@ -320,6 +327,9 @@ func (h *Host) handleIncomingCommand(
 		return h.handleDisconnect(*currentPeer, cmd)
 	case protocol.Ping:
 		if *currentPeer == nil {
+			return inboundReject
+		}
+		if (*currentPeer).State != core.PeerStateConnected && (*currentPeer).State != core.PeerStateDisconnectLater {
 			return inboundReject
 		}
 		return inboundAccept
@@ -568,6 +578,15 @@ func (h *Host) handleAcknowledge(p *peer.Peer, command protocol.Acknowledge) boo
 			return false
 		}
 		h.notifyConnect(p)
+	} else if p.State == core.PeerStateDisconnecting {
+		if commandNumber != protocol.CommandDisconnect {
+			return false
+		}
+		// The disconnect payload is for the remote peer. ENet reports zero data
+		// when the locally initiated disconnect completes.
+		h.runtime[p].eventData = 0
+		p.State = core.PeerStateZombie
+		h.enqueuePeerDispatch(p)
 	} else if h.runtime[p].disconnectLater && p.State == core.PeerStateDisconnectLater && !h.hasOutgoingCommands(p) {
 		// In-receive Disconnect path always lands on the Connected/DisconnectLater
 		// branch which queues the bye-bye command without flushing, so it cannot
@@ -920,19 +939,14 @@ func (h *Host) queueUnreliableIncomingCommand(p *peer.Peer, cmd *peer.IncomingCo
 		cmd.UnreliableSequenceNumber <= channel.IncomingUnreliableSequenceNumber {
 		return inboundIgnore
 	}
+	// Scan the full queue for an exact duplicate. An early-exit comparison on
+	// raw uint16 values is incorrect when reliable sequence numbers straddle
+	// 0xFFFF/0x0000 and can admit the same unreliable command twice.
 	for elem := channel.IncomingUnreliableCommands.Back(); elem != nil; elem = elem.Prev() {
 		existing := elem.Value()
-		if existing.ReliableSequenceNumber < cmd.ReliableSequenceNumber {
-			break
-		}
-		if existing.ReliableSequenceNumber > cmd.ReliableSequenceNumber {
-			continue
-		}
-		if existing.UnreliableSequenceNumber == cmd.UnreliableSequenceNumber {
+		if existing.ReliableSequenceNumber == cmd.ReliableSequenceNumber &&
+			existing.UnreliableSequenceNumber == cmd.UnreliableSequenceNumber {
 			return inboundIgnore
-		}
-		if existing.UnreliableSequenceNumber < cmd.UnreliableSequenceNumber {
-			break
 		}
 	}
 	if !p.CanQueueWaitingData(checkedUint32FromInt(len(cmd.Packet.Data)), h.config.MaximumWaitingData) {
@@ -1071,6 +1085,7 @@ func (h *Host) dispatchEvent() (Event, bool) {
 				Packet:    cmd.Packet,
 			}, true
 		case core.PeerStateZombie:
+			h.throttle.MarkRecalculate()
 			data := h.runtime[p].eventData
 			h.resetPeer(p)
 			return Event{
@@ -1096,7 +1111,7 @@ func parseCommand(payload []byte) (protocol.PacketCommand, int, bool) {
 
 func decompressPayload(compressor core.Compressor, in, out []byte) (int, bool) {
 	n, err := compressor.Decompress(in, out)
-	return n, err == nil
+	return n, err == nil && n > 0 && n <= len(out)
 }
 
 func (h *Host) enqueuePeerDispatch(p *peer.Peer) {
@@ -1119,6 +1134,7 @@ func (h *Host) removePeerDispatch(p *peer.Peer) {
 }
 
 func (h *Host) notifyConnect(p *peer.Peer) {
+	h.throttle.MarkRecalculate()
 	previousState := p.State
 	if p.State == core.PeerStateConnecting {
 		p.State = core.PeerStateConnectionSucceeded
