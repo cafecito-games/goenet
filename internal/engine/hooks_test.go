@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"testing"
 
 	"github.com/cafecito-games/goenet/internal/core"
 	iprotocol "github.com/cafecito-games/goenet/internal/protocol"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServiceInterceptConsumesBeforeProtocolDecode(t *testing.T) {
@@ -130,6 +133,40 @@ func TestServiceChecksumRejectsInvalidAndAcceptsValidInboundPackets(t *testing.T
 	}
 }
 
+func TestInvalidChecksumDoesNotRefreshPeerLivenessOrBandwidth(t *testing.T) {
+	checksummer := checksumFunc(testChecksum)
+	host, sock := newReceiveHost(t, func(cfg *core.Config) {
+		cfg.Checksum = checksummer
+	})
+	raw := host.AddPeer(mustAddress(t, "127.0.0.1:9001"), core.PeerStateConnected)
+	raw.IncomingPeerID = 0
+	raw.IncomingSessionID = 1
+	raw.ConnectID = 0x10203040
+	raw.LastReceiveTime = 123
+	raw.IncomingDataTotal = 456
+	host.serviceTime = 1000
+
+	payload := checksumDatagram(t, raw.ConnectID, checksummer,
+		iprotocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+			Flags:     iprotocol.HeaderFlagSentTime,
+			SentTime:  0x1212,
+		},
+		iprotocol.Ping{Header: iprotocol.CommandHeader{
+			ChannelID:              0xFF,
+			ReliableSequenceNumber: 1,
+		}},
+	)
+	payload[len(payload)-1] ^= 0xFF
+	sock.QueueInbound(raw.Address.AddrPort(), payload)
+
+	_, err := host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(123), raw.LastReceiveTime)
+	assert.Equal(t, uint32(456), raw.IncomingDataTotal)
+}
+
 func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	compressor := &testCompressor{}
 
@@ -194,6 +231,28 @@ func TestServiceCompressionRoundTripOnSendAndReceive(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsInvalidDecompressedLengthWithoutPanicking(t *testing.T) {
+	for _, decompressedLength := range []int{-1, 0, 4097} {
+		t.Run(fmt.Sprintf("length_%d", decompressedLength), func(t *testing.T) {
+			host, sock := newReceiveHost(t, func(cfg *core.Config) {
+				cfg.Compressor = invalidLengthCompressor{decompressedLength: decompressedLength}
+			})
+			header, err := (iprotocol.Header{
+				PeerID: iprotocol.MaximumPeerID,
+				Flags:  iprotocol.HeaderFlagCompressed,
+			}).AppendBinary(nil)
+			require.NoError(t, err)
+			sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), append(header, 1))
+
+			require.NotPanics(t, func() {
+				event, serviceErr := host.Service(context.Background(), 0)
+				require.NoError(t, serviceErr)
+				assert.Equal(t, core.EventNone, event.Type)
+			})
+		})
+	}
+}
+
 type interceptFunc func(netip.AddrPort, []byte) (core.InterceptDecision, error)
 
 func (fn interceptFunc) Intercept(addr netip.AddrPort, payload []byte) (core.InterceptDecision, error) {
@@ -211,6 +270,18 @@ type testCompressor struct {
 	decompressCalls int
 	nextID          byte
 	stored          map[byte][]byte
+}
+
+type invalidLengthCompressor struct {
+	decompressedLength int
+}
+
+func (c invalidLengthCompressor) Compress(_ [][]byte, _ int, _ []byte) (int, error) {
+	return 0, nil
+}
+
+func (c invalidLengthCompressor) Decompress(_, _ []byte) (int, error) {
+	return c.decompressedLength, nil
 }
 
 func (c *testCompressor) Compress(buffers [][]byte, inLimit int, out []byte) (int, error) {

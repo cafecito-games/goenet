@@ -11,7 +11,7 @@ import (
 
 // TestHostConcurrentServiceAndOps verifies the documented "Host is safe for
 // concurrent use" contract: a Service goroutine and several other goroutines
-// each calling Send/Connect/State/BandwidthLimit at once must not race or panic.
+// each calling Send/Connect/State/BandwidthLimit/Reset at once must not race or panic.
 func TestHostConcurrentServiceAndOps(t *testing.T) {
 	t.Parallel()
 
@@ -70,6 +70,14 @@ func TestHostConcurrentServiceAndOps(t *testing.T) {
 			}
 		}()
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(25 * time.Millisecond)
+		_ = peer.DisconnectNow(context.Background(), 0xDEAD)
+		peer.Reset()
+	}()
 
 	wg.Wait()
 	close(stop)

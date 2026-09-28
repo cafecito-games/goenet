@@ -140,13 +140,10 @@ func TestBuildHarnessRebuildsWhenScenarioChanges(t *testing.T) {
 	path, _ := runBuildHarness(t, cfg, "go_server_reliable_exchange")
 	before := modTime(t, path)
 	source := scenarioSourcePath("go_server_reliable_exchange")
-	original := mustReadFile(t, source)
 	originalModTime := modTime(t, source)
 	t.Cleanup(func() {
-		mustWriteFile(t, source, original)
 		mustSetModTime(t, source, originalModTime)
 	})
-	mustWriteFile(t, source, original+"\n")
 	mustSetModTime(t, source, before.Add(time.Second))
 	_, output := runBuildHarness(t, cfg, "go_server_reliable_exchange")
 	after := modTime(t, path)

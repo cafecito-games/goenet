@@ -187,6 +187,9 @@ func (h *Host) Broadcast(channelID uint8, packet *Packet) error {
 	}
 	defer h.mu.Unlock()
 	h.engine.SetServiceTime(h.nowMs())
+	if corePacket == nil {
+		return ErrNilPacket
+	}
 
 	var errs []error
 	for _, wrapped := range h.orderedPeers() {
@@ -324,6 +327,10 @@ func (h *Host) orderedPeers() []*Peer {
 			continue
 		}
 		if wrapped, ok := h.peers[raw]; ok {
+			if wrapped.raw != raw || wrapped.generation != raw.Generation {
+				h.detachPeer(raw, wrapped)
+				continue
+			}
 			ordered = append(ordered, wrapped)
 		}
 	}
@@ -336,22 +343,36 @@ func (h *Host) wrapPeer(raw *peer.Peer) *Peer {
 	}
 
 	if wrapped, ok := h.peers[raw]; ok {
-		wrapped.raw = raw
-		wrapped.state = raw.State
-		return wrapped
+		if wrapped.raw == raw && wrapped.generation == raw.Generation {
+			wrapped.state = raw.State
+			return wrapped
+		}
+		h.detachPeer(raw, wrapped)
 	}
 
 	wrapped := &Peer{
-		host:  h,
-		raw:   raw,
-		state: raw.State,
+		host:       h,
+		raw:        raw,
+		generation: raw.Generation,
+		state:      raw.State,
 	}
 	h.peers[raw] = wrapped
 	return wrapped
 }
 
 func (h *Host) translateEvent(event engine.Event) Event {
-	wrapped := h.wrapPeer(event.Peer)
+	terminal := event.Peer != nil && (event.Type == core.EventDisconnect || event.Type == core.EventDisconnectTimeout)
+	var wrapped *Peer
+	// The engine resets a zombie before returning its terminal event, which
+	// advances the slot generation. Preserve the just-ended session's public
+	// handle for that event, then detach it below. Every non-terminal event must
+	// pass through wrapPeer's generation check.
+	if terminal {
+		wrapped = h.peers[event.Peer]
+	}
+	if wrapped == nil {
+		wrapped = h.wrapPeer(event.Peer)
+	}
 	out := Event{
 		Type:      event.Type,
 		Peer:      wrapped,
@@ -362,14 +383,22 @@ func (h *Host) translateEvent(event engine.Event) Event {
 	// After surfacing a terminal peer event, drop the wrapper from the map so a
 	// future re-use of the same engine peer slot allocates a fresh public Peer
 	// rather than keeping the caller's stale handle bound to a new session.
-	if event.Peer != nil && (event.Type == core.EventDisconnect || event.Type == core.EventDisconnectTimeout) {
-		if wrapped != nil {
-			wrapped.raw = nil
-			wrapped.state = PeerStateDisconnected
-		}
-		delete(h.peers, event.Peer)
+	if terminal {
+		h.detachPeer(event.Peer, wrapped)
 	}
 	return out
+}
+
+// detachPeer invalidates a public handle after an engine slot has been reset.
+// The caller must hold h.mu.
+func (h *Host) detachPeer(raw *peer.Peer, wrapped *Peer) {
+	if wrapped != nil {
+		wrapped.raw = nil
+		wrapped.state = PeerStateDisconnected
+	}
+	if raw != nil && h.peers[raw] == wrapped {
+		delete(h.peers, raw)
+	}
 }
 
 func durationMillis(timeout time.Duration) uint32 {
@@ -381,5 +410,9 @@ func durationMillis(timeout time.Duration) uint32 {
 		return math.MaxUint32
 	}
 
-	return uint32(timeout / time.Millisecond)
+	millis := timeout / time.Millisecond
+	if millis == 0 {
+		return 1
+	}
+	return uint32(millis)
 }

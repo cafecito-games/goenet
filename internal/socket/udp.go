@@ -23,6 +23,17 @@ type UDP struct {
 	writeToUDP          func([]byte, *net.UDPAddr) (int, error)
 }
 
+type nonblockingReadKey struct{}
+
+const nonblockingReadPollWindow = time.Millisecond
+
+// WithNonblockingRead marks socket reads made with ctx as polls. A poll still
+// returns an already-buffered datagram, but a would-block timeout is surfaced
+// immediately instead of being retried until ctx is canceled.
+func WithNonblockingRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, nonblockingReadKey{}, true)
+}
+
 // NewUDP wraps conn with the DatagramSocket interface.
 func NewUDP(conn *net.UDPConn, logger *slog.Logger) *UDP {
 	return &UDP{
@@ -61,6 +72,9 @@ func (s *UDP) ReadPacket(ctx context.Context, buf []byte) (int, core.Address, er
 		if isTimeoutError(err) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, core.Address{}, ctxErr
+			}
+			if isNonblockingRead(ctx) {
+				return 0, core.Address{}, context.DeadlineExceeded
 			}
 			continue
 		}
@@ -124,10 +138,22 @@ func (s *UDP) Close() error {
 // 100ms heartbeat — long enough to avoid a tight 100Hz spin against an idle
 // socket, short enough to react to ctx.Done() promptly.
 func nextPollDeadline(ctx context.Context) time.Time {
+	if isNonblockingRead(ctx) {
+		// A deadline at exactly time.Now is already expired by the time the
+		// runtime poller observes it, so it can skip an otherwise-buffered UDP
+		// datagram. A short future deadline gives the poller one genuine receive
+		// attempt while keeping an empty-socket poll tightly bounded.
+		return time.Now().Add(nonblockingReadPollWindow)
+	}
 	if ctxDeadline, ok := ctx.Deadline(); ok {
 		return ctxDeadline
 	}
 	return time.Now().Add(100 * time.Millisecond)
+}
+
+func isNonblockingRead(ctx context.Context) bool {
+	nonblocking, _ := ctx.Value(nonblockingReadKey{}).(bool)
+	return nonblocking
 }
 
 func isTimeoutError(err error) bool {

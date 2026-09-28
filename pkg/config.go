@@ -32,6 +32,10 @@ func normalizeConfig(cfg Config) (normalized Config, coreCfg core.Config, err er
 		err = fmt.Errorf("goenet: peer count must be non-negative")
 		return
 	}
+	if cfg.PeerCount > int(protocol.MaximumPeerID) {
+		err = fmt.Errorf("goenet: peer count must not exceed %d", protocol.MaximumPeerID)
+		return
+	}
 
 	coreCfg = core.DefaultConfig()
 	if cfg.PeerCount != 0 {

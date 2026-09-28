@@ -100,6 +100,14 @@ func TestListenRejectsNegativePeerCount(t *testing.T) {
 	}
 }
 
+func TestListenRejectsPeerCountAboveProtocolLimit(t *testing.T) {
+	_, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    int(protocol.MaximumPeerID) + 1,
+		ChannelLimit: 1,
+	})
+	require.Error(t, err)
+}
+
 func TestListenRejectsTooSmallMTU(t *testing.T) {
 	if _, err := Listen("127.0.0.1:0", Config{PeerCount: 1, ChannelLimit: 1, MTU: 1}); err == nil {
 		t.Fatal("expected too-small MTU to be rejected")
@@ -345,6 +353,101 @@ func TestCloseWaitsForInFlightServiceCall(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Close to finish after Service returned")
 	}
+}
+
+func TestServiceZeroTimeoutPollsWithoutBlocking(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{PeerCount: 1, ChannelLimit: 1})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	event, err := host.Service(ctx, 0)
+	require.NoError(t, err)
+	assert.Equal(t, EventNone, event.Type)
+	assert.Less(t, time.Since(started), 250*time.Millisecond)
+}
+
+func TestServiceZeroTimeoutReceivesBufferedDatagram(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Intercept: interceptorFunc(func(netip.AddrPort, []byte) (InterceptDecision, error) {
+			return InterceptDecision{
+				Result: InterceptResultConsume,
+				Event:  &Event{Type: EventDisconnect, Data: 0xBEEF},
+			}, nil
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	conn, err := net.DialUDP("udp", nil, host.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Write([]byte("buffered"))
+	require.NoError(t, err)
+
+	event, err := host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, EventDisconnect, event.Type)
+	assert.Equal(t, uint32(0xBEEF), event.Data)
+}
+
+func TestServiceDrainsBufferedDatagramBurst(t *testing.T) {
+	const packetCount = 5
+	intercepted := 0
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Intercept: interceptorFunc(func(netip.AddrPort, []byte) (InterceptDecision, error) {
+			intercepted++
+			return InterceptDecision{Result: InterceptResultConsume}, nil
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	conn, err := net.DialUDP("udp", nil, host.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	for i := 0; i < packetCount; i++ {
+		_, err = conn.Write([]byte{byte(i)})
+		require.NoError(t, err)
+	}
+
+	_, err = host.Service(context.Background(), time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, packetCount, intercepted)
+}
+
+func TestServiceReturnsPromptlyAfterReceivingDatagram(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Intercept: interceptorFunc(func(netip.AddrPort, []byte) (InterceptDecision, error) {
+			return InterceptDecision{
+				Result: InterceptResultConsume,
+				Event:  &Event{Type: EventDisconnect, Data: 0xC0FFEE},
+			}, nil
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	conn, err := net.DialUDP("udp", nil, host.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Write([]byte("intercept me"))
+	require.NoError(t, err)
+
+	started := time.Now()
+	event, err := host.Service(context.Background(), 2*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, EventDisconnect, event.Type)
+	assert.Equal(t, uint32(0xC0FFEE), event.Data)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 func TestServiceReturnsStablePeerHandlesAcrossEvents(t *testing.T) {
@@ -686,6 +789,29 @@ func TestDisconnectOnConnectedPeerQueuesAcknowledgedDisconnect(t *testing.T) {
 	if disconnect.Data != 9 {
 		t.Fatalf("disconnect data = %d, want 9", disconnect.Data)
 	}
+
+	raw := peer.raw
+	sock.QueueInbound(netip.MustParseAddrPort("127.0.0.1:9001"), marshalDatagram(
+		protocol.Header{
+			PeerID:    raw.IncomingPeerID,
+			SessionID: raw.IncomingSessionID,
+		},
+		protocol.Acknowledge{
+			Header: protocol.CommandHeader{
+				ChannelID:              disconnect.Header.ChannelID,
+				ReliableSequenceNumber: 3,
+			},
+			ReceivedReliableSequenceNumber: disconnect.Header.ReliableSequenceNumber,
+			ReceivedSentTime:               header.SentTime,
+		},
+	))
+
+	event, err := host.Service(context.Background(), time.Millisecond)
+	require.NoError(t, err)
+	assert.Equal(t, EventDisconnect, event.Type)
+	assert.Same(t, peer, event.Peer)
+	assert.Zero(t, event.Data)
+	require.ErrorIs(t, peer.Send(0, &Packet{Data: []byte("stale")}), ErrNilPeer)
 }
 
 func TestPeerDisconnectLaterQueuesDisconnectAfterPendingReliableAck(t *testing.T) {
@@ -836,7 +962,7 @@ func TestDisconnectNowFlushesUnsequencedDisconnectAndResetsConnectedPeer(t *test
 	}
 }
 
-func TestDisconnectNowOnDisconnectedPeerIsSafe(t *testing.T) {
+func TestDisconnectNowOnResetPeerReturnsNilPeer(t *testing.T) {
 	host, sock := newTestHost()
 	peer := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 0x11223344)
 	baselineWrites := sock.WriteCount()
@@ -844,9 +970,7 @@ func TestDisconnectNowOnDisconnectedPeerIsSafe(t *testing.T) {
 	disconnectNow := mustDisconnectNowPeer(t, peer)
 	peer.Reset()
 
-	if err := disconnectNow.DisconnectNow(context.Background(), 1); err != nil {
-		t.Fatal(err)
-	}
+	require.ErrorIs(t, disconnectNow.DisconnectNow(context.Background(), 1), ErrNilPeer)
 	if got := peer.State(); got != PeerStateDisconnected {
 		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
 	}
@@ -865,11 +989,145 @@ func TestPeerResetInvalidatesStateLocally(t *testing.T) {
 	if got := peer.State(); got != PeerStateDisconnected {
 		t.Fatalf("peer state = %d, want %d", got, PeerStateDisconnected)
 	}
-	if err := peer.Send(0, &Packet{Data: []byte("after reset"), Flags: PacketFlagReliable}); err == nil {
-		t.Fatal("expected send after reset to fail")
-	}
+	require.ErrorIs(t, peer.Send(0, &Packet{Data: []byte("after reset"), Flags: PacketFlagReliable}), ErrNilPeer)
 	if got := sock.WriteCount(); got != baselineWrites {
 		t.Fatalf("writes after reset = %d, want %d", got, baselineWrites)
+	}
+}
+
+func TestLocallyResetPeerHandleStaysInvalidAfterSlotReuse(t *testing.T) {
+	tests := []struct {
+		name      string
+		connected bool
+		reset     func(*Peer) error
+	}{
+		{
+			name:      "Reset",
+			connected: true,
+			reset: func(p *Peer) error {
+				p.Reset()
+				return nil
+			},
+		},
+		{
+			name:      "DisconnectNow",
+			connected: true,
+			reset: func(p *Peer) error {
+				return p.DisconnectNow(context.Background(), 1)
+			},
+		},
+		{
+			name: "DisconnectDuringHandshake",
+			reset: func(p *Peer) error {
+				return p.Disconnect(context.Background(), 1)
+			},
+		},
+		{
+			name: "DisconnectLaterDuringHandshake",
+			reset: func(p *Peer) error {
+				return p.DisconnectLater(context.Background(), 1)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, sock := newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+			var first *Peer
+			var err error
+			if tt.connected {
+				first = mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+			} else {
+				first, err = host.Connect("127.0.0.1:9001", 1, 1)
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, tt.reset(first))
+			assertStalePeer(t, first, sock)
+
+			second := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9002", 2)
+			require.NotSame(t, first, second)
+			assertStalePeer(t, first, sock)
+			require.Len(t, host.peers, 1)
+
+			beforeSend := sock.WriteCount()
+			require.NoError(t, second.Send(0, &Packet{Data: []byte("new peer"), Flags: PacketFlagReliable}))
+			require.NoError(t, host.Flush(context.Background()))
+			require.Equal(t, beforeSend+1, sock.WriteCount())
+			assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:9002"), sock.MustWrite(t, beforeSend).Addr.AddrPort())
+
+			beforeBroadcast := sock.WriteCount()
+			require.NoError(t, host.Broadcast(0, &Packet{Data: []byte("broadcast"), Flags: PacketFlagReliable}))
+			require.NoError(t, host.Flush(context.Background()))
+			require.Equal(t, beforeBroadcast+1, sock.WriteCount())
+			assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:9002"), sock.MustWrite(t, beforeBroadcast).Addr.AddrPort())
+		})
+	}
+}
+
+func assertStalePeer(t *testing.T, stale *Peer, sock *testsupport.FakeSocket) {
+	t.Helper()
+	baselineWrites := sock.WriteCount()
+
+	assert.Equal(t, PeerStateDisconnected, stale.State())
+	assert.Nil(t, stale.RemoteAddr())
+	assert.False(t, stale.RemoteAddrPort().IsValid())
+	require.ErrorIs(t, stale.Send(0, &Packet{Data: []byte("stale")}), ErrNilPeer)
+	require.ErrorIs(t, stale.Disconnect(context.Background(), 1), ErrNilPeer)
+	require.ErrorIs(t, stale.DisconnectNow(context.Background(), 1), ErrNilPeer)
+	require.ErrorIs(t, stale.DisconnectLater(context.Background(), 1), ErrNilPeer)
+	require.NotPanics(t, stale.Reset)
+	require.Equal(t, baselineWrites, sock.WriteCount())
+}
+
+func TestEngineResetCannotRebindStalePublicPeer(t *testing.T) {
+	host, sock := newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+	first := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+	raw := first.raw
+
+	host.mu.Lock()
+	host.engine.Reset(raw)
+	host.mu.Unlock()
+
+	second := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9002", 2)
+	require.NotSame(t, first, second)
+	assertStalePeer(t, first, sock)
+}
+
+func TestOrderedPeersRejectsStaleGeneration(t *testing.T) {
+	host, sock := newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+	firstAddress, err := core.AddressFromAddrPort(netip.MustParseAddrPort("127.0.0.1:9001"))
+	require.NoError(t, err)
+	raw := host.engine.AddPeer(firstAddress, core.PeerStateConnected)
+	first := host.wrapPeer(raw)
+
+	host.engine.Reset(raw)
+	secondAddress, err := core.AddressFromAddrPort(netip.MustParseAddrPort("127.0.0.1:9002"))
+	require.NoError(t, err)
+	raw = host.engine.AddPeer(secondAddress, core.PeerStateConnected)
+	require.NoError(t, host.Broadcast(0, &Packet{Data: []byte("must skip"), Flags: PacketFlagReliable}))
+	require.NoError(t, host.Flush(context.Background()))
+	require.Zero(t, sock.WriteCount())
+	require.Empty(t, host.peers)
+	assert.Equal(t, PeerStateDisconnected, first.State())
+
+	second := host.wrapPeer(raw)
+	require.NotSame(t, first, second)
+	require.NoError(t, host.Broadcast(0, &Packet{Data: []byte("fresh"), Flags: PacketFlagReliable}))
+	require.NoError(t, host.Flush(context.Background()))
+	require.Equal(t, 1, sock.WriteCount())
+	assert.Equal(t, netip.MustParseAddrPort("127.0.0.1:9002"), sock.MustWrite(t, 0).Addr.AddrPort())
+}
+
+func TestPeerWrapperMapDoesNotGrowAcrossReconnectCycles(t *testing.T) {
+	host, sock := newConfiguredTestHost(Config{PeerCount: 1, ChannelLimit: 1})
+	current := mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+
+	for cycle := 0; cycle < 4; cycle++ {
+		current.Reset()
+		require.Empty(t, host.peers)
+		current = mustConnectAndVerifyPeer(t, host, sock, fmt.Sprintf("127.0.0.1:%d", 9002+cycle), uint32(cycle+2))
+		require.Len(t, host.peers, 1)
 	}
 }
 
@@ -1017,6 +1275,15 @@ func TestPublicSendSurfacesExportedSentinels(t *testing.T) {
 				t.Helper()
 				host, sock := newTestHost()
 				_ = mustConnectAndVerifyPeer(t, host, sock, "127.0.0.1:9001", 1)
+				return host.Broadcast(0, nil)
+			},
+			wantErr: ErrNilPacket,
+		},
+		{
+			name: "broadcast nil packet without peers",
+			act: func(t *testing.T) error {
+				t.Helper()
+				host, _ := newTestHost()
 				return host.Broadcast(0, nil)
 			},
 			wantErr: ErrNilPacket,

@@ -70,19 +70,20 @@ const (
 
 // Host carries the minimal outbound engine state for queueing and flush tests.
 type Host struct {
-	config        core.Config
-	logger        *slog.Logger
-	socket        socket.DatagramSocket
-	peers         []*peer.Peer
-	serviceTime   uint32
-	totalQueued   uint32
-	throttle      bandwidthThrottler
-	dispatchSet   map[*peer.Peer]struct{}
-	dispatchQ     []*peer.Peer
-	runtime       map[*peer.Peer]*peerRuntime
-	intercepted   *Event
-	nextConnectID uint32
-	sessionIDSeed uint8
+	config         core.Config
+	logger         *slog.Logger
+	socket         socket.DatagramSocket
+	peers          []*peer.Peer
+	serviceTime    uint32
+	totalQueued    uint32
+	throttle       bandwidthThrottler
+	dispatchSet    map[*peer.Peer]struct{}
+	dispatchQ      []*peer.Peer
+	runtime        map[*peer.Peer]*peerRuntime
+	intercepted    *Event
+	nextConnectID  uint32
+	nextGeneration uint64
+	sessionIDSeed  uint8
 	// selectionScratch backs the []outgoingSelection that selectOutgoingBatch
 	// returns, so Flush does not allocate a batch per datagram. One buffer per
 	// host is enough: every engine call runs under the public host mutex, and
@@ -445,6 +446,8 @@ func (h *Host) initializePeer(
 		LastRoundTripTimeVariance:    0,
 		HighestRoundTripTimeVariance: 0,
 	}
+	h.nextGeneration++
+	p.Generation = h.nextGeneration
 }
 
 func (h *Host) nextPeerConnectID() uint32 {
