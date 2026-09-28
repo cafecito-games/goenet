@@ -369,6 +369,59 @@ func TestServiceZeroTimeoutPollsWithoutBlocking(t *testing.T) {
 	assert.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
+func TestServiceZeroTimeoutReceivesBufferedDatagram(t *testing.T) {
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Intercept: interceptorFunc(func(netip.AddrPort, []byte) (InterceptDecision, error) {
+			return InterceptDecision{
+				Result: InterceptResultConsume,
+				Event:  &Event{Type: EventDisconnect, Data: 0xBEEF},
+			}, nil
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	conn, err := net.DialUDP("udp", nil, host.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Write([]byte("buffered"))
+	require.NoError(t, err)
+
+	event, err := host.Service(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, EventDisconnect, event.Type)
+	assert.Equal(t, uint32(0xBEEF), event.Data)
+}
+
+func TestServiceDrainsBufferedDatagramBurst(t *testing.T) {
+	const packetCount = 5
+	intercepted := 0
+	host, err := Listen("127.0.0.1:0", Config{
+		PeerCount:    1,
+		ChannelLimit: 1,
+		Intercept: interceptorFunc(func(netip.AddrPort, []byte) (InterceptDecision, error) {
+			intercepted++
+			return InterceptDecision{Result: InterceptResultConsume}, nil
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = host.Close() })
+
+	conn, err := net.DialUDP("udp", nil, host.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	for i := 0; i < packetCount; i++ {
+		_, err = conn.Write([]byte{byte(i)})
+		require.NoError(t, err)
+	}
+
+	_, err = host.Service(context.Background(), time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, packetCount, intercepted)
+}
+
 func TestServiceReturnsPromptlyAfterReceivingDatagram(t *testing.T) {
 	host, err := Listen("127.0.0.1:0", Config{
 		PeerCount:    1,
