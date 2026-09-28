@@ -35,6 +35,15 @@ const (
 	PeerStateZombie = core.PeerStateZombie
 )
 
+// PeerSender is the outbound send capability of a Peer.
+//
+// Consumers that narrow Peer behind a local interface should embed PeerSender
+// instead of redeclaring Send when they need to preserve the upstream method
+// identity.
+type PeerSender interface {
+	Send(channelID uint8, packet *Packet) error
+}
+
 // Peer is the public handle for a remote endpoint.
 //
 // # Lifecycle

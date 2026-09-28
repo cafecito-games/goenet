@@ -46,6 +46,7 @@ Host operations:
 
 Peer operations:
 
+- `PeerSender` is the embeddable outbound capability for consumer-owned peer interfaces
 - `Peer.State() PeerState`
 - `Peer.Send(channelID uint8, packet *Packet) error`
 - `Peer.Disconnect(ctx context.Context, data uint32) error`
