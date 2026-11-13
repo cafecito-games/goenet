@@ -174,6 +174,40 @@ defer host.Close()
 - `DisconnectNow` always uses the immediate unsequenced path: notify the remote peer, flush immediately, and reset the local peer without waiting for a later disconnect event.
 - Any path that resets a peer locally—including `Reset`, `DisconnectNow`, and handshake-state `Disconnect` or `DisconnectLater`—invalidates that `Peer` handle immediately. Its operations then return `ErrNilPeer`, `State` reports `PeerStateDisconnected`, and its remote address is unavailable. If the engine reuses the slot, the new session receives a fresh handle; stale handles are never rebound.
 
+## CLI Tooling (`enetctl`) & Network Impairment
+
+`goenet` includes `enetctl` ([`cmd/enetctl`](./cmd/enetctl)), a companion CLI for testing and diagnostics, alongside an embeddable UDP impairment package ([`pkg/lagrelay`](./pkg/lagrelay)).
+
+Install the CLI:
+
+```sh
+go install github.com/cafecito-games/goenet/cmd/enetctl@latest
+```
+
+### `enetctl lagrelay`
+
+`lagrelay` is a transport-agnostic UDP proxy that adds configurable one-way latency, jitter (preserving per-direction FIFO ordering), and packet loss over real sockets so RTT estimation, adaptive packet throttling, and retransmissions behave as they do on an impaired link.
+
+Start a relay in front of an upstream UDP/ENet server:
+
+```sh
+enetctl lagrelay --listen 127.0.0.1:7777 --upstream 127.0.0.1:9000 --preset 4g
+```
+
+Once bound, `lagrelay` prints a single JSON ready line (`listen`, `upstream`, `control_url`, `profile`) to `stdout` and writes structured logs (`--log-level`, `--log-format auto|text|json`) to `stderr`.
+
+Inspect or update the live impairment profile without disconnecting clients:
+
+```sh
+enetctl lagrelay status
+enetctl lagrelay set bad
+enetctl lagrelay set --up-ms 80 --down-ms 80 --jitter-ms 25 --loss-pct 1
+```
+
+Built-in presets (delays are one-way): `none`, `good`, `4g`, `bad`, `awful`, `jitter`, `lossy`. Scripts can also query or update the loopback control endpoint directly (`GET/POST http://127.0.0.1:7790/profile`).
+
+Go tests can embed the relay in-process via `github.com/cafecito-games/goenet/pkg/lagrelay`.
+
 ## Examples
 
 The executable examples in [`examples/`](./examples) use the exported `goenet` package only. They cover:
