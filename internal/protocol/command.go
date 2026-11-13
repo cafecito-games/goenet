@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package protocol implements ENet packet headers and command wire formats.
 package protocol
 

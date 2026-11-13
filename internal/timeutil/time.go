@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package timeutil mirrors ENet's overflow-safe millisecond time helpers.
 package timeutil
 

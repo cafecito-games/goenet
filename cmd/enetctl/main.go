@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Command enetctl provides developer and diagnostic utilities for ENet and UDP
 // transports built with goenet.
 package main

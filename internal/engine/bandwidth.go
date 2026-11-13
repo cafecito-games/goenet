@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package engine implements the ENet-compatible host runtime: peer state
 // machine, send/receive paths, bandwidth throttling, and timeout management.
 package engine

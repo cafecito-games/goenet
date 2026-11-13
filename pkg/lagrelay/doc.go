@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package lagrelay provides a transport-agnostic UDP impairment proxy that
 // injects one-way latency, jitter, and packet loss between clients and an
 // upstream UDP server.
