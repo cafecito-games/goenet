@@ -20,7 +20,16 @@ linters:
     - nilerr
     - bodyclose
     - errorlint
+    - goheader
   settings:
+    goheader:
+      values:
+        const:
+          COMPANY: Cafecito Games LLC
+          YEAR: "2026"
+      template: |-
+        Copyright (c) {{ YEAR }} {{ COMPANY }}
+        SPDX-License-Identifier: MIT
     revive:
       rules:
         - name: blank-imports

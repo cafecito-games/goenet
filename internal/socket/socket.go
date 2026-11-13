@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package socket provides the narrow datagram I/O abstraction used by the host runtime.
 package socket
 

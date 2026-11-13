@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package peer holds the internal ENet peer, channel, and queue state machines.
 package peer
 

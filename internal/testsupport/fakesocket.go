@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 // Package testsupport provides deterministic helpers for internal tests.
 package testsupport
 

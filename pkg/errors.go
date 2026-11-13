@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Cafecito Games LLC
+// SPDX-License-Identifier: MIT
+
 package goenet
 
 import "github.com/cafecito-games/goenet/internal/engine"
